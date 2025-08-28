@@ -84,10 +84,6 @@ def _login_view():
             else:
                 st.error("Usuario o contraseña incorrectos.")
 
-# Botón de cerrar sesión solo si ya inició
-if st.session_state.authenticated:
-    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
-
 # Gate de acceso: si no está autenticado, muestra login y detiene la renderización
 if not st.session_state.authenticated:
     _login_view()
@@ -127,95 +123,65 @@ def _register_default_font():
     # Fallback: Helvetica (puede limitar acentos Unicode)
     return "Helvetica"
 
-
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, ListFlowable, ListItem, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from io import BytesIO
-from pathlib import Path
-from datetime import datetime
-import html, re as _re
-
-def _register_default_font():
-    try:
-        pdfmetrics.registerFont(TTFont("DejaVu", "DejaVuSans.ttf"))
-        return "DejaVu"
-    except Exception:
-        return "Helvetica"
-
 def _mk_paragraph(text: str, style_name: str, styles, font_name: str):
+    # Sanitiza y reemplaza saltos de línea por <br/>
     safe = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe = safe.replace("\n", "<br/>")
     style = ParagraphStyle(name=style_name, parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14)
     return Paragraph(safe, style)
 
-def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix Controller",
-                              autor="Fénix Automotriz", logo_path=LOGO_PATH):
+def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix Controller", autor="Fénix Automotriz", logo_path=LOGO_PATH):
+    """
+    Genera un PDF (bytes) a partir de la lista de dicts en st.session_state.historial
+    Formato de cada item esperado: {"pregunta": str, "respuesta": str, "ts": optional datetime/str}
+    """
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.6*cm, bottomMargin=1.6*cm)
+    # Documento base
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
     styles = getSampleStyleSheet()
     font_name = _register_default_font()
     story = []
+
     # Encabezado
+    # Logo si existe
     try:
-        if Path(str(logo_path)).exists():
-            story.append(RLImage(str(logo_path), width=1.8*cm, height=1.8*cm))
+        if Path(logo_path).exists():
+            story.append(RLImage(logo_path, width=2.0*cm, height=2.0*cm))
             story.append(Spacer(1, 0.2*cm))
     except Exception:
         pass
-    title_style = ParagraphStyle(name="TitleFx", parent=styles["Title"], fontName=font_name, fontSize=16, leading=20)
-    subtitle_style = ParagraphStyle(name="SubFx", parent=styles["Normal"], fontName=font_name, fontSize=10, textColor="#555")
-    story.append(Paragraph(titulo, title_style))
-    story.append(Paragraph(f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style))
-    story.append(Spacer(1, 0.4*cm))
 
-    # Cuerpo
+    title_style = ParagraphStyle(name="Title", parent=styles["Title"], fontName=font_name, fontSize=16, leading=20)
+    subtitle_style = ParagraphStyle(name="Sub", parent=styles["Normal"], fontName=font_name, fontSize=10, textColor="#555555")
+    story.append(Paragraph(titulo, title_style))
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
+    story.append(Paragraph(f"Generado: {fecha}", subtitle_style))
+    story.append(Spacer(1, 0.5*cm))
+
+    # Cuerpo: iterar Q/A
     if not historial:
-        story.append(_mk_paragraph("No hay entradas en el historial.", "EmptyFx", styles, font_name))
+        story.append(_mk_paragraph("No hay entradas en el historial.", "Empty", styles, font_name))
     else:
         for i, item in enumerate(historial, start=1):
-            q = str(item.get("pregunta", "")).strip()
-            a = str(item.get("respuesta", "") or "")
-            # filtrar 'viz:'
-            lines = []
-            for ln in a.splitlines():
-                if ln.strip().lower().startswith("viz:"):
-                    continue
-                lines.append(ln)
-            a = "\n".join(lines)
+            q = str(item.get("pregunta", ""))
+            a = str(item.get("respuesta", ""))
+            ts = item.get("ts")
+            if ts:
+                try:
+                    ts = str(ts)
+                except Exception:
+                    ts = None
 
             story.append(_mk_paragraph(f"<b>#{i} — Pregunta</b>", f"QH{i}", styles, font_name))
             story.append(_mk_paragraph(q, f"Q{i}", styles, font_name))
             story.append(Spacer(1, 0.15*cm))
 
-            story.append(_mk_paragraph("<b>Respuesta</b>", f"AH{i}", styles, font_name))
+            story.append(_mk_paragraph(f"<b>Respuesta</b>", f"AH{i}", styles, font_name))
+            story.append(_mk_paragraph(a, f"A{i}", styles, font_name))
+            story.append(Spacer(1, 0.35*cm))
 
-            blocks = []
-            current_list = []
-            for ln in a.split("\n"):
-                if _re.match(r"^\s*-\s+", ln):
-                    current_list.append(ln.strip()[2:].strip())
-                else:
-                    if current_list:
-                        blocks.append(("list", current_list.copy())); current_list = []
-                    blocks.append(("p", ln))
-            if current_list: blocks.append(("list", current_list))
-
-            for kind, payload in blocks:
-                if kind == "p":
-                    if payload.strip() == "":
-                        story.append(Spacer(1, 0.1*cm))
-                    else:
-                        story.append(_mk_paragraph(payload, f"A{i}", styles, font_name))
-                else:
-                    items = [ListItem(_mk_paragraph(x, f"L{i}", styles, font_name)) for x in payload]
-                    story.append(ListFlowable(items, bulletType="bullet", start="•", leftIndent=12))
-
-            story.append(Spacer(1, 0.5*cm))
-            if len(a) > 2500:
+            # Salto de página suave cada ~6 bloques (opcional)
+            if i % 6 == 0:
                 story.append(PageBreak())
 
     try:
@@ -226,37 +192,8 @@ def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix
     return pdf_bytes
 
 # Asegura que exista el historial en session_state
-# Asegura que exista el historial en session_state
 if "historial" not in st.session_state:
     st.session_state.historial = []
-
-# UI en el sidebar para descarga del PDF
-with st.sidebar:
-    st.markdown("### 📄 Exportar")
-    if HAVE_REPORTLAB:
-        if st.session_state.historial:
-            try:
-                _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
-                st.download_button(
-                    "Descargar historial (PDF)",
-                    data=_pdf_data,
-                    file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.warning(f"No se pudo generar el PDF: {e}")
-        else:
-            st.caption("Aún no hay historial para exportar.")
-    else:
-        st.info("Para exportar a PDF, agrega `reportlab` a tu requirements.txt y vuelve a desplegar.")
-# =========================
-# 📄 Fin Exportar Historial
-# =========================
-
-# =========================
-# 🔐 Fin Login + Logo
-# =========================
 
 # ======== Estilo ========
 st.markdown("""
@@ -272,6 +209,33 @@ html, body, [data-testid="stMarkdownContainer"]{
 [data-testid="stMarkdownContainer"] code{font-family:inherit!important;background:transparent!important;}
 </style>
 """, unsafe_allow_html=True)
+# ======== Temas de color (propuestas) ========
+_THEMES = {
+    "Fénix (negro + verde lima)": {"primary":"#39D353","bg":"#0a0a0a","panel":"#121212","text":"#f2f2f2","muted":"#9aa0a6"},
+    "Azul profesional": {"primary":"#1e88e5","bg":"#0b1220","panel":"#111827","text":"#e5e7eb","muted":"#9ca3af"},
+    "Oscuro elegante": {"primary":"#8b5cf6","bg":"#0d0d0e","panel":"#151518","text":"#f4f4f5","muted":"#a1a1aa"},
+    "Claro minimalista": {"primary":"#16a34a","bg":"#ffffff","panel":"#f8fafc","text":"#111827","muted":"#6b7280"},
+}
+def _apply_theme(name: str):
+    t = _THEMES.get(name, _THEMES["Fénix (negro + verde lima)"])
+    css = f"""<style>
+    :root {{
+      --color-primary: {t['primary']};
+      --color-bg: {t['bg']};
+      --color-panel: {t['panel']};
+      --color-text: {t['text']};
+      --color-muted: {t['muted']};
+    }}
+    .stApp, html, body {{ background: var(--color-bg) !important; color: var(--color-text) !important; }}
+    [data-testid="stSidebar"] {{ background: var(--color-panel) !important; }}
+    .stButton>button, .stDownloadButton>button, .stDownloadButton>button:hover {{
+        background: var(--color-primary) !important; border-color: var(--color-primary) !important; color: white !important; font-weight: 600;
+    }}
+    .stDataFrame thead tr th {{ background: var(--color-panel) !important; color: var(--color-text) !important; }}
+    .stDataFrame tbody tr td {{ color: var(--color-text) !important; }}
+    </style>"""
+    st.markdown(css, unsafe_allow_html=True)
+
 
 ss = st.session_state
 ss.setdefault("historial", [])
@@ -313,20 +277,70 @@ def _get_openai_client():
     try: return OpenAI(**kw)
     except: return None
 
-def ask_gpt(messages) -> str:
+
+def ask_gpt(messages, model: str = "gpt-4o", temperature: float = 0.15, max_tokens: int | None = None, action: str = "chat", question_hint: str = "") -> str:
+    """Wrapper de OpenAI que además guarda el uso de tokens en session_state y en un log local.
+    Devuelve SOLO el texto para mantener compatibilidad con el resto del código.
+    """
     client = _get_openai_client()
     if client is None:
+        st.session_state['_last_usage'] = None
         return "⚠️ No hay OPENAI_API_KEY configurada."
     try:
         r = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=messages,
-            temperature=0.15
+            temperature=temperature,
+            max_tokens=max_tokens
         )
-        return r.choices[0].message.content or ""
+        text = (r.choices[0].message.content or "").strip()
+        usage = None
+        if getattr(r, "usage", None):
+            usage = {
+                "prompt_tokens": getattr(r.usage, "prompt_tokens", None),
+                "completion_tokens": getattr(r.usage, "completion_tokens", None),
+                "total_tokens": getattr(r.usage, "total_tokens", None),
+                "model": model,
+                "action": action,
+                "question": question_hint
+            }
+        st.session_state['_last_usage'] = usage
+        try:
+            if usage:
+                _log_tokens_persist(usage)
+        except Exception:
+            pass
+        return text
     except Exception as e:
+        st.session_state['_last_usage'] = None
         st.error(f"Fallo OpenAI: {e}")
         return "⚠️ Error de IA."
+
+# ======== Token usage (persistente local) ========
+from pathlib import Path as _Path
+_TOK_LOG = _Path(".tokens_usage.jsonl")
+
+def _log_tokens_persist(info: dict):
+    try:
+        rec = info.copy()
+        rec["ts"] = pd.Timestamp.utcnow().isoformat()
+        with _TOK_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+def read_tokens_history_df() -> pd.DataFrame:
+    if not _TOK_LOG.exists():
+        return pd.DataFrame(columns=["ts","action","question","model","prompt_tokens","completion_tokens","total_tokens"])
+    try:
+        rows = [json.loads(x) for x in _TOK_LOG.read_text(encoding="utf-8").splitlines() if x.strip()]
+        df = pd.DataFrame(rows)
+        for c in ["prompt_tokens","completion_tokens","total_tokens"]:
+            if c in df: df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["ts","action","question","model","prompt_tokens","completion_tokens","total_tokens"])
+
 
 def diagnosticar_openai():
     res = {"api_key_present": False, "organization_set": False, "base_url_set": False,
@@ -1336,6 +1350,7 @@ def build_verified_summary(facts: dict) -> str:
         lines = [f"- {val.title()} ({op.upper()}): {_fmt(total)} (sobre {rows} filas)."]
     return encabezado + "\n".join(lines)
 
+
 def compose_focus_text(facts: dict, pregunta: str) -> str:
     op     = (facts.get("op") or "sum").upper()
     vrole  = facts.get("value_role","unknown")
@@ -1347,45 +1362,109 @@ def compose_focus_text(facts: dict, pregunta: str) -> str:
     def _fmt(v):
         if vrole=="money" and op!="COUNT": return fmt_money(v)
         return _fmt_number_general(v)
-    lines = [build_verified_summary(facts)]
-    lines.append("### Diagnóstico")
+
+    secciones = []
+    secciones.append(build_verified_summary(facts))
+
+    # Diagnóstico
+    diag = []
     if cat and by_cat:
         top3 = by_cat[:3]
         det = "; ".join([f"{c['categoria']}: {_fmt(c['valor'])}" for c in top3])
-        lines.append(f"- Top 3 por **{cat}** → {det}.")
+        diag.append(f"Top 3 por **{cat}** → {det}.")
         if len(by_cat) >= 5:
             tail = by_cat[3:5]
             det2 = "; ".join([f"{c['categoria']}: {_fmt(c['valor'])}" for c in tail])
-            lines.append(f"- Siguientes → {det2}.")
+            diag.append(f"Siguientes → {det2}.")
+        share_top1 = (by_cat[0]['valor']/max(1e-9,total)) if total and by_cat and vrole!="percent" else None
+        if share_top1 and share_top1>0.35:
+            diag.append("Alta concentración: la 1ª categoría supera 35% del total.")
     else:
-        lines.append(f"- Resultado global: {_fmt(total)}.")
+        diag.append(f"Resultado global: {_fmt(total)}.")
+    secciones.append("### Diagnóstico\n" + "\n".join([f"- {d}" for d in diag]))
+
+    # Recomendaciones
     recs = []
     if vrole=="money" and op in ("SUM","MAX"):
-        recs.append("Ajustar mix hacia categorías con mejor margen.")
-        recs.append("Revisar pricing en categorías con menor aporte.")
+        recs += [
+            "Ajustar mix hacia categorías con mejor margen.",
+            "Revisar pricing en categorías con menor aporte.",
+            "Estandarizar descuentos y aprobar excepciones por monto.",
+        ]
     elif op=="COUNT":
-        recs.append("Diseñar campañas sobre las 3 categorías más frecuentes.")
-        recs.append("Apalancar referidos en categorías con mayor recurrencia.")
+        recs += [
+            "Diseñar campañas sobre las 3 categorías más frecuentes.",
+            "Apalancar referidos en categorías con mayor recurrencia.",
+        ]
     else:
         recs.append("Monitorizar tendencia en el tiempo para validar estabilidad.")
-    lines.append("### Recomendaciones\n" + "\n".join([f"- {r}" for r in recs]))
-    return "\n\n".join(lines)
+    secciones.append("### Recomendaciones\n" + "\n".join([f"- {r}" for r in recs]))
+
+    # Estimaciones y proyecciones (muy simples si no hay tiempo)
+    if vrole in ("money","percent","quantity"):
+        promedio = (total/rows) if rows else None
+        if promedio is not None and np.isfinite(promedio):
+            base = total * 1.02
+            optim = total * 1.07
+            cons = total * 0.95
+            secciones.append("### Estimaciones y proyecciones\n"
+                             f"- **Base (siguiente periodo)**: {_fmt(base)}\n"
+                             f"- **Optimista**: {_fmt(optim)}\n"
+                             f"- **Conservador**: {_fmt(cons)}\n"
+                             "- Supuesto: misma base de datos y estacionalidad promedio.")
+    # Riesgos
+    riesgos = [
+        "Dependencia de pocas categorías/clientes (concentración).",
+        "Subida de costos de insumos impacta margen si no se ajusta precio.",
+        "Demoras operativas elevan lead time y reducen capacidad efectiva."
+    ]
+    secciones.append("### Riesgos y alertas\n" + "\n".join([f"- {r}" for r in riesgos]))
+
+    # Próximos pasos
+    pasos = [
+        "Definir meta de margen y gap vs. actual.",
+        "Plan de precios (política de descuentos y revisión mensual).",
+        "Playbook comercial para empujar mix de mayor aporte.",
+    ]
+    secciones.append("### Próximos pasos\n" + "\n".join([f"- {p}" for p in pasos]))
+
+    return "\n\n".join(secciones)
 
 # ======== Interfaz ========
 st.title("🤖 Controller Financiero IA")
 
+
 with st.sidebar:
     st.markdown("### Menú")
-    ss.menu_sel = st.radio(
-        "Secciones",
-        ["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"],
-        index=["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"].index(ss.menu_sel),
-        label_visibility="collapsed"
-    )
+    _menu_items = ["Datos","Vista previa","KPIs","Consulta IA","Historial","Uso de Tokens","Diagnóstico IA","Soporte"]
+    try:
+        idx = _menu_items.index(ss.menu_sel)
+    except Exception:
+        idx = 0
+    ss.menu_sel = st.radio("Secciones", _menu_items, index=idx, label_visibility="collapsed")
+
+    st.markdown("---")
+    st.markdown("### 📄 Exportar")
+    if HAVE_REPORTLAB:
+        if st.session_state.historial:
+            try:
+                _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
+                st.download_button("Descargar historial (PDF)", data=_pdf_data,
+                                   file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
+                                   mime="application/pdf", use_container_width=True)
+            except Exception as e:
+                st.warning(f"No se pudo generar el PDF: {e}")
+        else:
+            st.caption("Aún no hay historial para exportar.")
+    else:
+        st.info("Para exportar a PDF agrega `reportlab` al requirements y vuelve a desplegar.")
+
     st.markdown("---")
     st.markdown("### Preferencias")
     ss.max_cats_grafico = st.number_input("Máx. categorías para graficar", 6, 200, ss.max_cats_grafico)
     ss.top_n_grafico    = st.number_input("Top-N por defecto (barras)", 5, 100, ss.top_n_grafico)
+    theme_choice = st.selectbox("🎨 Tema de colores", list(_THEMES.keys()), index=0, help="Cambia la paleta de colores de la app")
+    _apply_theme(theme_choice)
 
     with st.expander("🔧 Diagnóstico del código"):
         st.caption(f"Build: **{APP_BUILD}**")
@@ -1395,6 +1474,10 @@ with st.sidebar:
         except Exception as e:
             st.caption(f"No pude inspeccionar funciones: {e}")
 
+    st.markdown("---")
+    st.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
+    st.caption("**Soporte:** contacto@nexa.cl · +56973421015")
+    st.caption("Desarrollado por Nexa corp. IA. Todos los derechos reservados.")
 # ======== Vistas ========
 if ss.menu_sel == "Datos":
     st.markdown("### 📁 Datos")
@@ -1472,6 +1555,9 @@ elif ss.menu_sel == "Consulta IA":
             raw = ask_gpt(prompt_analisis_general(analisis))
             with left:
                 render_ia_html_block(prettify_answer(raw) + "\n\n" + texto_extra, height=520)
+                _u = st.session_state.get('_last_usage')
+                if _u:
+                    st.caption(f"Uso de tokens — prompt: {_u.get('prompt_tokens', '?')}, completion: {_u.get('completion_tokens', '?')}, total: {_u.get('total_tokens', '?')} · modelo: {_u.get('model', '?')}")
             with right:
                 render_finance_table(data)
                 st.markdown("### Distribución por cliente y procesos")
@@ -1556,7 +1642,11 @@ elif ss.menu_sel == "Consulta IA":
                 with left:
                     st.error(f"No pude calcular con precisión: {facts.get('msg') or 'plan vacío'}. Uso la ruta de análisis clásico.")
                 raw = ask_gpt(prompt_consulta_libre(pregunta, schema))
-                with left:  render_ia_html_block(raw, height=620)
+                with left:
+                    render_ia_html_block(raw, height=620)
+                    _u = st.session_state.get("_last_usage")
+                    if _u:
+                        st.caption(f"Uso de tokens — prompt: {_u.get('prompt_tokens', '?')}, completion: {_u.get('completion_tokens', '?')}, total: {_u.get('total_tokens', '?')} · modelo: {_u.get('model', '?')}")
                 with right:
                     ok = False
                     try:
@@ -1569,7 +1659,11 @@ elif ss.menu_sel == "Consulta IA":
                 ss.historial.append({"pregunta":pregunta,"respuesta":raw})
             else:
                 texto_left = compose_focus_text(facts, pregunta)
-                with left:  render_ia_html_block(texto_left, height=520)
+                with left:
+                    render_ia_html_block(texto_left, height=520)
+                    _u = st.session_state.get("_last_usage")
+                    if _u:
+                        st.caption(f"Uso de tokens — prompt: {_u.get('prompt_tokens', '?')}, completion: {_u.get('completion_tokens', '?')}, total: {_u.get('total_tokens', '?')} · modelo: {_u.get('model', '?')}")
                 with right:
                     df_res = facts["df_result"]
                     if facts.get("category_col"):
@@ -1618,6 +1712,27 @@ elif ss.menu_sel == "Historial":
     else:
         st.info("Aún no hay historial en esta sesión.")
 
+
+elif ss.menu_sel == "Uso de Tokens":
+    _df_tok = read_tokens_history_df()
+    if _df_tok.empty:
+        st.info("Sin registros todavía. A medida que hagas consultas o análisis se guardará aquí el uso.")
+    else:
+        st.dataframe(_df_tok.sort_values("ts", ascending=False), use_container_width=True)
+        st.metric("Consultas registradas", int(len(_df_tok)))
+        if "total_tokens" in _df_tok:
+            st.metric("Total de tokens", int(pd.to_numeric(_df_tok["total_tokens"], errors="coerce").sum()))
+        with st.expander("Detalle crudo (JSONL)"):
+            try:
+                st.code("\n".join(open('.tokens_usage.jsonl','r',encoding='utf-8').read().splitlines()[-200:]) )
+            except Exception:
+                st.caption("No se pudo abrir el archivo de log.")
+elif ss.menu_sel == "Soporte":
+    st.markdown("### 📬 Soporte")
+    st.markdown("- **Email:** contacto@nexa.cl")
+    st.markdown("- **Teléfono:** +56973421015")
+    st.markdown("- Horario: Lun–Vie 09:00–18:00 (GMT-4)")
+    st.success("¡Gracias por usar Fénix Controller!")
 elif ss.menu_sel == "Diagnóstico IA":
     st.markdown("### 🔎 Diagnóstico de la IA (OpenAI)")
     st.caption("Verifica API Key, conexión, prueba mínima de chat y estado de cuota.")
