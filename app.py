@@ -30,12 +30,6 @@ def _get_secret(name, default=None):
     except Exception:
         return default
 
-st.set_page_config(
-    page_title="Controller Financiero IA — Fénix",
-    page_icon="Fenix_isotipo.png",  # coloca el PNG en la raíz del repo
-    layout="wide"
-)
-
 # Credenciales de acceso (puedes setear en .streamlit/secrets.toml)
 _USER_DEFAULT = "admin"
 _PASS_DEFAULT = "1234"
