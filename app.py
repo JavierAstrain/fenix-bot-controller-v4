@@ -17,7 +17,11 @@ from streamlit.components.v1 import html as st_html
 from analizador import analizar_datos_taller
 
 APP_BUILD = "build-2025-08-27-focus-v7b"
-st.set_page_config(layout="wide", page_title="Controller Financiero IA")
+st.set_page_config(
+    page_title="Controller Financiero IA — Fénix",
+    page_icon="Fenix_isotipo.png",  # PNG en la raíz del repo
+    layout="wide"
+)
 
 
 # =========================
