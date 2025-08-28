@@ -211,13 +211,16 @@ html, body, [data-testid="stMarkdownContainer"]{
 """, unsafe_allow_html=True)
 # ======== Temas de color (propuestas) ========
 _THEMES = {
-    "Fénix (negro + verde lima)": {"primary":"#39D353","bg":"#0a0a0a","panel":"#121212","text":"#f2f2f2","muted":"#9aa0a6"},
-    "Azul profesional": {"primary":"#1e88e5","bg":"#0b1220","panel":"#111827","text":"#e5e7eb","muted":"#9ca3af"},
-    "Oscuro elegante": {"primary":"#8b5cf6","bg":"#0d0d0e","panel":"#151518","text":"#f4f4f5","muted":"#a1a1aa"},
-    "Claro minimalista": {"primary":"#16a34a","bg":"#ffffff","panel":"#f8fafc","text":"#111827","muted":"#6b7280"},
+    "Azul (fondo claro)": {"primary": "#1E88E5", "bg": "#FFFFFF", "panel": "#F5F7FB", "text": "#0F172A", "muted": "#64748B"},
+    "Verde Fénix (fondo claro)": {"primary": "#39D353", "bg": "#FFFFFF", "panel": "#F5F7FB", "text": "#0F172A", "muted": "#64748B"},
+    "Rojo claro": {"primary": "#F87171", "bg": "#FFFFFF", "panel": "#FDF2F2", "text": "#111827", "muted": "#6B7280"},
+    "Negro (acento)": {"primary": "#111827", "bg": "#FFFFFF", "panel": "#F3F4F6", "text": "#111827", "muted": "#6B7280"},
+    "Naranjo": {"primary": "#FB923C", "bg": "#FFFFFF", "panel": "#FFF7ED", "text": "#111827", "muted": "#6B7280"},
+    "Plateado": {"primary": "#9CA3AF", "bg": "#FFFFFF", "panel": "#F3F4F6", "text": "#111827", "muted": "#6B7280"},
+    "Dorado": {"primary": "#D4AF37", "bg": "#FFFFFF", "panel": "#FFFBEA", "text": "#111827", "muted": "#6B7280"},
 }
 def _apply_theme(name: str):
-    t = _THEMES.get(name, _THEMES["Fénix (negro + verde lima)"])
+    t = _THEMES.get(name, _THEMES["Verde Fénix (fondo claro)"])
     css = f"""<style>
     :root {{
       --color-primary: {t['primary']};
@@ -1476,8 +1479,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
-    st.caption("**Soporte:** contacto@nexa.cl · +56973421015")
-    st.caption("Desarrollado por Nexa corp. IA. Todos los derechos reservados.")
+st.caption("Desarrollado por Nexa corp. IA. Todos los derechos reservados.")
 # ======== Vistas ========
 if ss.menu_sel == "Datos":
     st.markdown("### 📁 Datos")
