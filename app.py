@@ -69,7 +69,7 @@ def _logout():
           st.session_state.pop(k, None)
     st.rerun()
 
-def _login_view():
+def _login_view() -> bool:
     render_logo_topright(LOGO_SIZE_LOGIN)
     st.markdown("## 🔐 Iniciar sesión")
     with st.form("login_form"):
@@ -80,16 +80,20 @@ def _login_view():
             if (u or "") == str(USER) and (p or "") == str(PASSWORD):
                 st.session_state.authenticated = True
                 st.success("Acceso concedido. Cargando…")
-                st.rerun()
+                return True
             else:
                 st.error("Usuario o contraseña incorrectos.")
+    return False
+
 
 # Botón de cerrar sesión solo si ya inició
+if st.session_state.authenticated:
+    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
 
 # Gate de acceso: si no está autenticado, muestra login y detiene la renderización
 if not st.session_state.authenticated:
-    _login_view()
-    st.stop()
+    if not _login_view():
+        st.stop()
 
 # Logo en la vista principal (arriba a la derecha)
 render_logo_topright(LOGO_SIZE_APP)
@@ -132,113 +136,127 @@ def _mk_paragraph(text: str, style_name: str, styles, font_name: str):
     style = ParagraphStyle(name=style_name, parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14)
     return Paragraph(safe, style)
 
-
-def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix Controller",
-                              autor="Fénix Automotriz", logo_path=LOGO_PATH):
-    """Genera un PDF (bytes) prolijo a partir del historial."""
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, ListFlowable, ListItem, PageBreak
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-    except Exception as e:
-        raise RuntimeError("ReportLab no disponible") from e
-
-    import datetime as _dt
-    from io import BytesIO
-    from pathlib import Path as _Path
-    import html, re
-
-    def _register_default_font():
-        try:
-            pdfmetrics.registerFont(TTFont("DejaVu", "DejaVuSans.ttf"))
-            return "DejaVu"
-        except Exception:
-            return "Helvetica"
-
-    def _mk_paragraph(txt, style):
-        return Paragraph(txt, style)
-
-    def _sanitize_text(t: str) -> str:
-        t = (t or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-        # Quitar instrucciones 'viz:' que no pertenecen al reporte
-        lines = []
-        for ln in t.splitlines():
-            if ln.strip().lower().startswith("viz:"):
-                continue
-            lines.append(ln)
-        t = "\n".join(lines)
-        # Escapar HTML salvo etiquetas básicas que solemos usar
-        t = html.escape(t).replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>") \
-                          .replace("&lt;i&gt;", "<i>").replace("&lt;/i&gt;", "</i>") \
-                          .replace("&lt;br&gt;", "<br/>").replace("&lt;br/&gt;", "<br/>")
-        return t
-
-    buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.6*cm, bottomMargin=1.6*cm
-    )
+def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix Controller", autor="Fénix Automotriz", logo_path=LOGO_PATH):
+    """
+    Genera un PDF (bytes) a partir de la lista de dicts en st.session_state.historial
+    Formato de cada item esperado: {"pregunta": str, "respuesta": str, "ts": optional datetime/str}
+    """
+    buffer = BytesIO()
+    # Documento base
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
     styles = getSampleStyleSheet()
-    base_font = _register_default_font()
-    styles.add(ParagraphStyle(name="TitleFx", parent=styles["Title"], fontName=base_font, spaceAfter=10))
-    styles.add(ParagraphStyle(name="MetaFx", parent=styles["Normal"], fontName=base_font, fontSize=9, textColor="#666"))
-    styles.add(ParagraphStyle(name="H1Fx", parent=styles["Heading2"], fontName=base_font, spaceBefore=8, spaceAfter=6))
-    styles.add(ParagraphStyle(name="QFx", parent=styles["Normal"], fontName=base_font, leading=14, spaceAfter=6))
-    styles.add(ParagraphStyle(name="AFx", parent=styles["Normal"], fontName=base_font, leading=14))
-
+    font_name = _register_default_font()
     story = []
-    # Portada
-    if _Path(str(logo_path)).exists():
-        story.append(Image(str(logo_path), width=1.8*cm, height=1.8*cm))
-        story.append(Spacer(1, 0.2*cm))
-    story.append(_mk_paragraph(titulo, styles["TitleFx"]))
-    story.append(_mk_paragraph(f"Generado: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["MetaFx"]))
-    story.append(Spacer(1, 0.4*cm))
 
+    # Encabezado
+    # Logo si existe
+    try:
+        if Path(logo_path).exists():
+            story.append(RLImage(logo_path, width=2.0*cm, height=2.0*cm))
+            story.append(Spacer(1, 0.2*cm))
+    except Exception:
+        pass
+
+    title_style = ParagraphStyle(name="Title", parent=styles["Title"], fontName=font_name, fontSize=16, leading=20)
+    subtitle_style = ParagraphStyle(name="Sub", parent=styles["Normal"], fontName=font_name, fontSize=10, textColor="#555555")
+    story.append(Paragraph(titulo, title_style))
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M")
+    story.append(Paragraph(f"Generado: {fecha}", subtitle_style))
+    story.append(Spacer(1, 0.5*cm))
+
+    # Cuerpo: iterar Q/A
     if not historial:
-        story.append(_mk_paragraph("No hay entradas en el historial.", styles["AFx"]))
+        story.append(_mk_paragraph("No hay entradas en el historial.", "Empty", styles, font_name))
     else:
         for i, item in enumerate(historial, start=1):
-            q = str(item.get("pregunta", "")).strip()
-            a = _sanitize_text(str(item.get("respuesta", "") or ""))
+            q = str(item.get("pregunta", ""))
+            a = str(item.get("respuesta", ""))
+            ts = item.get("ts")
+            if ts:
+                try:
+                    ts = str(ts)
+                except Exception:
+                    ts = None
 
-            story.append(_mk_paragraph(f"<b>#{i} — Pregunta</b>", styles["H1Fx"]))
-            story.append(_mk_paragraph(html.escape(q), styles["QFx"]))
-            story.append(_mk_paragraph("<b>Respuesta</b>", styles["H1Fx"]))
+            story.append(_mk_paragraph(f"<b>#{i} — Pregunta</b>", f"QH{i}", styles, font_name))
+            story.append(_mk_paragraph(q, f"Q{i}", styles, font_name))
+            story.append(Spacer(1, 0.15*cm))
 
-            # Interpretar bullets '- ' como lista
-            blocks = []
-            current_list = []
-            for ln in a.split("\n"):
-                if re.match(r"^\s*-\s+", ln):
-                    current_list.append(ln.strip()[2:].strip())
-                else:
-                    if current_list:
-                        blocks.append(("list", current_list.copy()))
-                        current_list = []
-                    blocks.append(("p", ln))
-            if current_list:
-                blocks.append(("list", current_list))
+            story.append(_mk_paragraph(f"<b>Respuesta</b>", f"AH{i}", styles, font_name))
+            story.append(_mk_paragraph(a, f"A{i}", styles, font_name))
+            story.append(Spacer(1, 0.35*cm))
 
-            for kind, payload in blocks:
-                if kind == "p":
-                    if payload.strip() == "":
-                        story.append(Spacer(1, 0.1*cm))
-                    else:
-                        story.append(_mk_paragraph(payload, styles["AFx"]))
-                else:
-                    items = [ListItem(_mk_paragraph(html.escape(x), styles["AFx"])) for x in payload]
-                    story.append(ListFlowable(items, bulletType="bullet", start="•", leftIndent=12))
-
-            story.append(Spacer(1, 0.5*cm))
-            if len(a) > 2500:
+            # Salto de página suave cada ~6 bloques (opcional)
+            if i % 6 == 0:
                 story.append(PageBreak())
 
-    doc.build(story)
-    return buf.getvalue()
+    try:
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+    finally:
+        buffer.close()
+    return pdf_bytes
 
+# Asegura que exista el historial en session_state
+if "historial" not in st.session_state:
+    st.session_state.historial = []
+
+# UI en el sidebar para descarga del PDF
+with st.sidebar:
+    st.markdown("### 📄 Exportar")
+    if HAVE_REPORTLAB:
+        if st.session_state.historial:
+            try:
+                _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
+                st.download_button(
+                    "Descargar historial (PDF)",
+                    data=_pdf_data,
+                    file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.warning(f"No se pudo generar el PDF: {e}")
+        else:
+            st.caption("Aún no hay historial para exportar.")
+    else:
+        st.info("Para exportar a PDF, agrega `reportlab` a tu requirements.txt y vuelve a desplegar.")
+# =========================
+# 📄 Fin Exportar Historial
+# =========================
+
+# =========================
+# 🔐 Fin Login + Logo
+# =========================
+
+# ======== Estilo ========
+st.markdown("""
+<style>
+html, body, [data-testid="stMarkdownContainer"]{
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif !important;
+  font-size: 15.5px !important; line-height: 1.55 !important;
+}
+[data-testid="stMarkdownContainer"] h1,[data-testid="stMarkdownContainer"] h2,[data-testid="stMarkdownContainer"] h3{
+  font-weight:700 !important; letter-spacing:.2px;
+}
+[data-testid="stMarkdownContainer"] em,[data-testid="stMarkdownContainer"] i{font-style:normal!important;}
+[data-testid="stMarkdownContainer"] code{font-family:inherit!important;background:transparent!important;}
+</style>
+""", unsafe_allow_html=True)
+
+ss = st.session_state
+ss.setdefault("historial", [])
+ss.setdefault("data", None)
+ss.setdefault("sheet_url", "")
+ss.setdefault("max_cats_grafico", 18)
+ss.setdefault("top_n_grafico", 12)
+ss.setdefault("aliases", {})
+ss.setdefault("menu_sel", "KPIs")
+ss.setdefault("roles_forced", {})
+ss.setdefault("_wkey", 0)
+
+# ======== Carga de datos ========
+@st.cache_data(show_spinner=False, ttl=300)
 def load_excel(file):
     return pd.read_excel(file, sheet_name=None)
 
@@ -281,94 +299,6 @@ def ask_gpt(messages) -> str:
         st.error(f"Fallo OpenAI: {e}")
         return "⚠️ Error de IA."
 
-
-# ======== OpenAI con uso de tokens y latencia (no rompe funciones previas) ========
-import time
-
-def ask_gpt_with_usage(messages):
-    client = _get_openai_client()
-    if client is None:
-        return "⚠️ No hay OPENAI_API_KEY configurada.", None
-    try:
-        t0 = time.time()
-        r = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.15
-        )
-        txt = (r.choices[0].message.content or "").strip()
-        u = getattr(r, "usage", None)
-        usage = {
-            "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
-            "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
-            "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
-            "model": getattr(r, "model", "gpt-4o"),
-            "latency_ms": round((time.time()-t0)*1000.0, 1)
-        }
-        return txt, usage
-    except Exception as e:
-        st.error(f"Fallo OpenAI: {e}")
-        return "⚠️ Error de IA.", None
-
-def render_usage_caption(usage):
-    if not usage: 
-        return
-    st.caption(
-        f"Tokens: {usage['prompt_tokens']}/{usage['completion_tokens']} (prompt/completion), "
-        f"total {usage['total_tokens']} · Modelo: {usage['model']} · Latencia: {usage['latency_ms']} ms"
-    )
-
-# ======== Logging de uso a GSheet (si hay secret) o CSV local ========
-def _log_usage_to_csv(row: dict, path: str = "usage_log.csv"):
-    try:
-        import csv, os
-        file_exists = os.path.isfile(path)
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(row.keys()))
-            if not file_exists:
-                w.writeheader()
-            w.writerow(row)
-    except Exception:
-        pass
-
-def _log_usage_to_gsheet(row: dict):
-    url = _get_secret("USAGE_SHEET_URL")
-    keyfile = _get_secret("GOOGLE_CREDENTIALS")
-    if not (url and keyfile):
-        return False
-    try:
-        creds = Credentials.from_service_account_info(json.loads(keyfile),
-                    scopes=["https://www.googleapis.com/auth/spreadsheets"])
-        client = gspread.authorize(creds)
-        sh = client.open_by_url(url)
-        ws_list = {w.title: w for w in sh.worksheets()}
-        ws = ws_list.get("usage") or sh.add_worksheet("usage", rows=1, cols=20)
-        headers = ["ts","user","question","scope","model","prompt_tokens","completion_tokens","total_tokens","latency_ms"]
-        if ws.cell(1,1).value != "ts":
-            ws.update("A1:I1", [headers])
-        ws.append_row([row.get(k,"") for k in headers], value_input_option="RAW")
-        return True
-    except Exception:
-        return False
-
-def log_usage(question:str, usage:dict, scope:str="consulta"):
-    if not usage:
-        return
-    row = {
-        "ts": pd.Timestamp.now(tz="America/Santiago").isoformat(),
-        "user": st.session_state.get("auth_user","admin"),
-        "question": (question or "")[:300],
-        "scope": scope,
-        "model": usage.get("model",""),
-        "prompt_tokens": usage.get("prompt_tokens",0),
-        "completion_tokens": usage.get("completion_tokens",0),
-        "total_tokens": usage.get("total_tokens",0),
-        "latency_ms": usage.get("latency_ms",0.0)
-    }
-    ok = _log_usage_to_gsheet(row)
-    if not ok:
-        _log_usage_to_csv(row)
-    st.session_state.setdefault('usage_session_log', []).append(row)
 def diagnosticar_openai():
     res = {"api_key_present": False, "organization_set": False, "base_url_set": False,
            "list_models_ok": False, "chat_ok": False, "quota_ok": None, "usage_tokens": None, "error": None}
@@ -1077,8 +1007,7 @@ def make_system_prompt():
             "Responde SIEMPRE con estilo ejecutivo + analítico y basándote EXCLUSIVAMENTE en la planilla.")
 
 ANALYSIS_FORMAT = """
-Escribe SIEMPRE en este formato (usa '###' y bullets '- ').
-**Extensión mínima:** 180–300 palabras en total. En cada sección escribe 2–4 frases con cifras y acciones.
+Escribe SIEMPRE en este formato (usa '###' y bullets '- '):
 
 ### Resumen ejecutivo
 - 3 a 5 puntos clave con cifras y contexto.
@@ -1413,21 +1342,266 @@ def compose_focus_text(facts: dict, pregunta: str) -> str:
     lines.append("### Recomendaciones\n" + "\n".join([f"- {r}" for r in recs]))
     return "\n\n".join(lines)
 
+# ======== Interfaz ========
+st.title("🤖 Controller Financiero IA")
 
+with st.sidebar:
+    st.markdown("### Menú")
+    ss.menu_sel = st.radio(
+        "Secciones",
+        ["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"],
+        index=["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"].index(ss.menu_sel),
+        label_visibility="collapsed"
+    )
+    st.markdown("---")
+    st.markdown("### Preferencias")
+    ss.max_cats_grafico = st.number_input("Máx. categorías para graficar", 6, 200, ss.max_cats_grafico)
+    ss.top_n_grafico    = st.number_input("Top-N por defecto (barras)", 5, 100, ss.top_n_grafico)
 
-def prompt_expand_from_base(base_text: str, schema: dict, objetivo: str="finanzas") -> list:
-    system = make_system_prompt()
-    user = f"""
-Actúa como un controller financiero senior. A partir del siguiente TEXTO BASE, genera un INFORME PROFESIONAL más profundo y completo con el formato obligatorio. Evita repetir literalmente: amplía con análisis causal, estimaciones cuantificadas y acciones concretas. Si faltan datos, declara supuestos razonables y limita tus conclusiones.
-Objetivo del análisis: {objetivo}
+    with st.expander("🔧 Diagnóstico del código"):
+        st.caption(f"Build: **{APP_BUILD}**")
+        try:
+            h = hashlib.sha256(render_finance_table.__code__.co_code).hexdigest()[:16]
+            st.caption(f"Hash finanzas: `{h}`")
+        except Exception as e:
+            st.caption(f"No pude inspeccionar funciones: {e}")
 
-TEXTO BASE:
-{base_text}
+# ======== Vistas ========
+if ss.menu_sel == "Datos":
+    st.markdown("### 📁 Datos")
+    fuente = st.radio("Fuente", ["Excel","Google Sheets"], key="k_fuente")
+    if fuente == "Excel":
+        file = st.file_uploader("Sube un Excel", type=["xlsx","xls"])
+        if file:
+            ss.data = load_excel(file)
+            st.success("Excel cargado.")
+    else:
+        with st.form(key="form_gsheet"):
+            url = st.text_input("URL de Google Sheet", value=ss.sheet_url)
+            conectar = st.form_submit_button("Conectar")
+        if conectar and url:
+            try:
+                ss.data = load_gsheet(st.secrets["GOOGLE_CREDENTIALS"], url)
+                ss.sheet_url = url
+                st.success("Google Sheet conectado.")
+            except Exception as e:
+                st.error(f"Error conectando Google Sheet: {e}")
 
-ESQUEMA (con roles):
-{json.dumps(schema, ensure_ascii=False, indent=2)}
+elif ss.menu_sel == "Vista previa":
+    data = ss.data
+    if not data:
+        st.info("Carga datos en **Datos**.")
+    else:
+        st.markdown("### 📄 Hojas (con roles detectados)")
+        for name, df in data.items():
+            st.markdown(f"#### 📘 {name} • filas: {len(df)}")
+            roles = detect_roles_for_sheet(df, name)
+            st.caption("Roles: " + ", ".join([f"`{c}`→{r}" for c,r in roles.items()]))
+            st.dataframe(df.head(10), use_container_width=True)
 
-{ANALYSIS_FORMAT}
-"""
-    return [{"role":"system","content":system}, {"role":"user","content":user}]
+elif ss.menu_sel == "KPIs":
+    data = ss.data
+    if not data:
+        st.info("Carga datos en **Datos**.")
+    else:
+        kpis = analizar_datos_taller(data, "")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Ingresos ($)", f"{int(round(kpis['ingresos'])):,}".replace(",", "."))
+        c2.metric("Costos ($)",   f"{int(round(kpis['costos'])):,}".replace(",", "."))
+        c3.metric("Margen ($)",   f"{int(round(kpis['margen'])):,}".replace(",", "."))
+        c4.metric("Margen %",     f"{(kpis.get('margen_pct') or 0):.1f}%")
+        c5, c6, c7 = st.columns(3)
+        c5.metric("Servicios",    f"{kpis.get('servicios',0)}")
+        tp = kpis.get("ticket_promedio")
+        c6.metric("Ticket promedio", f"{fmt_money(tp) if tp else '—'}")
+        conv = kpis.get("conversion_pct")
+        c7.metric("Conversión",   f"{conv:.1f}%" if conv is not None else "—")
+        lt = kpis.get("lead_time_mediano_dias")
+        if lt is not None: st.caption(f"⏱️ Lead time mediano: {lt:.1f} días")
+
+elif ss.menu_sel == "Consulta IA":
+    data = ss.data
+    if not data:
+        st.info("Carga datos en **Datos**.")
+    else:
+        st.markdown("### 🤖 Consulta")
+
+        # Botones de análisis (arriba)
+        cBtns = st.columns(4)
+        left, right = st.columns([0.58, 0.42])
+
+        # Línea de pregunta + responder (juntos)
+        qcol, bcol = st.columns([0.82, 0.18])
+        pregunta = qcol.text_input("Pregunta", label_visibility="collapsed",
+                                   placeholder="Escribe tu pregunta...")
+        responder_click = bcol.button("Responder")
+
+        if cBtns[0].button("📊 Análisis General Automático"):
+            analisis = analizar_datos_taller(data, "")
+            ins = derive_global_insights(data)
+            texto_extra = compose_actionable_text(ins)
+            raw = ask_gpt(prompt_analisis_general(analisis))
+            with left:
+                render_ia_html_block(prettify_answer(raw) + "\n\n" + texto_extra, height=520)
+            with right:
+                render_finance_table(data)
+                st.markdown("### Distribución por cliente y procesos")
+                def is_tipo_cliente(n): return ("cliente" in n) and (("tipo" in n) or ("segment" in n))
+                h1, df1, cat1, val1 = find_best_pair_money(data, is_tipo_cliente)
+                def is_proceso(n): return (("proceso" in n) or ("servicio" in n))
+                h2, df2, cat2, val2 = find_best_pair_money(data, is_proceso)
+                cA, cB = st.columns(2)
+                if h1 and df1 is not None:
+                    with cA: mostrar_grafico_torta(df1, cat1, val1, "Distribución por Tipo de Cliente")
+                else:
+                    with cA: st.info("No encontré dinero + 'Tipo de cliente' para graficar.")
+                if h2 and df2 is not None:
+                    with cB: mostrar_grafico_barras_v3(df2, cat2, val2, "Monto por Proceso")
+                else:
+                    with cB: st.info("No encontré dinero + 'Proceso' para graficar.")
+            ss.historial.append({"pregunta":"Análisis general","respuesta":raw})
+
+        if cBtns[1].button("💵 Análisis Financiero"):
+            ins = derive_global_insights(data)
+            texto = "### Análisis financiero (foco)\n" + compose_actionable_text(ins)
+            with left:  render_ia_html_block(texto, height=520)
+            with right: render_finance_table(data)
+
+        if cBtns[2].button("⚙️ Análisis Operacional"):
+            texto = compose_operational_text(data)
+            with left:  render_ia_html_block(texto, height=520)
+            with right:
+                def is_proceso(n): return ("proceso" in n) or ("servicio" in n)
+                h, df, cat, val = find_best_pair_money(data, is_proceso)
+                if h: mostrar_grafico_barras_v3(df, cat, val, "Monto por Proceso")
+                else: st.info("No encontré un par (proceso, monto) para graficar.")
+
+        if cBtns[3].button("🔍 Insights de mercado"):
+            with left:
+                render_ia_html_block(compose_market_text(data), height=520)
+            with right:
+                # TABLAS (no barras) para Top Marcas / Modelos por CONTEO de OCs/OTs
+                def is_marca(n):  return any(k in n for k in ("marca","brand","make","fabricante"))
+                def is_modelo(n): return any(k in n for k in ("modelo","model","version","versión","trim"))
+
+                c_top = st.columns(2)
+
+                hM, dfM, catM, gM = best_count_by_category(data, is_marca)
+                with c_top[0]:
+                    if hM:
+                        mostrar_tabla_count(gM, catM, "__count__", "Top Marcas (por OCs/OTs)")
+                    else:
+                        st.info("Sin columna de **marca**.")
+
+                hMo, dfMo, catMo, gMo = best_count_by_category(data, is_modelo)
+                with c_top[1]:
+                    if hMo:
+                        mostrar_tabla_count(gMo, catMo, "__count__", "Top Modelos (por OCs/OTs)")
+                    else:
+                        st.info("Sin columna de **modelo**.")
+
+                # Estacionalidad
+                found = False
+                for h, df in data.items():
+                    if df is None or df.empty: continue
+                    roles = detect_roles_for_sheet(df, h)
+                    date_cols = [c for c,r in roles.items() if r=="date"]
+                    money_cols= [c for c,r in roles.items() if r=="money"]
+                    if date_cols and money_cols:
+                        dt = pd.to_datetime(df[date_cols[0]], errors="coerce")
+                        d2 = df.assign(__mm = dt.dt.to_period("M").dt.to_timestamp())
+                        d2 = d2.assign(MES = d2["__mm"].dt.strftime("%Y-%m"))
+                        mostrar_grafico_linea(d2, "MES", money_cols[0], "Estacionalidad (mes)")
+                        found = True
+                        break
+                if not found:
+                    st.info("No encontré (fecha + monto) para estacionalidad.")
+
+        # ------- Responder (junto a la pregunta) -------
+        if responder_click and pregunta:
+            schema = _build_schema(data)
+            plan_c = plan_compute_from_llm(pregunta, schema)
+            facts = execute_compute(plan_c, data)
+
+            if not facts.get("ok"):
+                with left:
+                    st.error(f"No pude calcular con precisión: {facts.get('msg') or 'plan vacío'}. Uso la ruta de análisis clásico.")
+                raw = ask_gpt(prompt_consulta_libre(pregunta, schema))
+                with left:  render_ia_html_block(raw, height=620)
+                with right:
+                    ok = False
+                    try:
+                        plan = plan_from_llm(pregunta, schema)
+                        ok = execute_plan(plan, data)
+                    except Exception as e:
+                        st.error(f"Error ejecutando plan: {e}")
+                    if not ok:
+                        st.info("Sin visual sugerida para esta consulta.")
+                ss.historial.append({"pregunta":pregunta,"respuesta":raw})
+            else:
+                texto_left = compose_focus_text(facts, pregunta)
+                with left:  render_ia_html_block(texto_left, height=520)
+                with right:
+                    df_res = facts["df_result"]
+                    if facts.get("category_col"):
+                        try:
+                            if facts.get("value_role")=="money" and facts.get("op","sum")!="count":
+                                mostrar_grafico_barras_v3(
+                                    df_res.rename(columns={facts["category_col"]: "CATEGORIA",
+                                                           "VALOR": "VALOR"}),
+                                    "CATEGORIA", "VALOR",
+                                    f"{facts['op'].upper()} de {facts['value_col']} por {facts['category_col']}"
+                                )
+                            else:
+                                # para conteos o no-moneda, uso tablas si está muy largo
+                                st.info("Distribución desbalanceada: muestro tabla para mejor lectura." if len(df_res)>15 else "")
+                                df_show = df_res.rename(columns={facts["category_col"]:"Categoría","VALOR":"Valor"}).copy()
+                                if facts.get("op","sum")=="count" or facts.get("value_role")!="money":
+                                    df_show["Valor"] = df_show["Valor"].apply(lambda v: int(round(float(v))) if pd.notna(v) else 0)
+                                else:
+                                    df_show["Valor"] = df_show["Valor"].apply(fmt_money)
+                                st.markdown("### 📋 Resultado")
+                                st.dataframe(df_show, use_container_width=True)
+                                st.download_button("⬇️ Descargar tabla (CSV)",
+                                                   df_show.to_csv(index=False).encode("utf-8"),
+                                                   "resultado.csv","text/csv", key=_unique_key("csv"))
+                        except Exception as e:
+                            st.error(f"Error graficando: {e}")
+                            st.dataframe(df_res, use_container_width=True)
+                    else:
+                        role = facts.get("value_role","unknown")
+                        valtxt = (fmt_money(facts['total']) if role=="money" and facts.get("op","sum")!="count"
+                                  else _fmt_number_general(facts['total']))
+                        st.metric(f"{facts['op'].upper()} de {facts['value_col']}", valtxt)
+                        st.dataframe(df_res, use_container_width=True)
+                    st.caption(f"Hoja: {facts['sheet']} • Filas: {facts['rows']}")
+                ss.historial.append({"pregunta":pregunta,"respuesta":texto_left})
+
+elif ss.menu_sel == "Historial":
+    if ss.historial:
+        for i, h in enumerate(ss.historial[-20:], 1):
+            st.markdown(f"**Q{i}:** {h['pregunta']}")
+            st.markdown(f"**A{i}:**")
+            try:
+                parsed = json.loads(h["respuesta"]); st.json(parsed)
+            except Exception:
+                render_ia_html_block(h["respuesta"], height=520)
+    else:
+        st.info("Aún no hay historial en esta sesión.")
+
+elif ss.menu_sel == "Diagnóstico IA":
+    st.markdown("### 🔎 Diagnóstico de la IA (OpenAI)")
+    st.caption("Verifica API Key, conexión, prueba mínima de chat y estado de cuota.")
+    if st.button("Diagnosticar IA"):
+        diag = diagnosticar_openai()
+        st.write("**Clave configurada:** ", "✅" if diag["api_key_present"] else "❌")
+        st.write("**Organization:** ", "✅" if diag["organization_set"] else "—")
+        st.write("**Base URL:** ", "✅" if diag["base_url_set"] else "—")
+        st.write("**Listar modelos:** ", "✅" if diag["list_models_ok"] else "❌")
+        st.write("**Prueba chat:** ", "✅" if diag["chat_ok"] else "❌")
+        if diag["quota_ok"] is True: st.success("Créditos/cuota: OK")
+        elif diag["quota_ok"] is False: st.error("❌ Sin créditos/cuota.")
+        else: st.info("No se pudo determinar la cuota.")
+        if diag["usage_tokens"] is not None: st.caption(f"Tokens: {diag['usage_tokens']}")
+        if diag["error"]: st.warning(f"Detalle: {diag['error']}")
 
