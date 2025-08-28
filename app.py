@@ -69,7 +69,7 @@ def _logout():
           st.session_state.pop(k, None)
     st.rerun()
 
-def _login_view() -> bool:
+def _login_view():
     render_logo_topright(LOGO_SIZE_LOGIN)
     st.markdown("## 🔐 Iniciar sesión")
     with st.form("login_form"):
@@ -80,17 +80,18 @@ def _login_view() -> bool:
             if (u or "") == str(USER) and (p or "") == str(PASSWORD):
                 st.session_state.authenticated = True
                 st.success("Acceso concedido. Cargando…")
-                return True
+                st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
-    return False
 
-
+# Botón de cerrar sesión solo si ya inició
+if st.session_state.authenticated:
+    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
 
 # Gate de acceso: si no está autenticado, muestra login y detiene la renderización
 if not st.session_state.authenticated:
-    if not _login_view():
-        st.stop()
+    _login_view()
+    st.stop()
 
 # Logo en la vista principal (arriba a la derecha)
 render_logo_topright(LOGO_SIZE_APP)
@@ -126,8 +127,26 @@ def _register_default_font():
     # Fallback: Helvetica (puede limitar acentos Unicode)
     return "Helvetica"
 
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, ListFlowable, ListItem, PageBreak
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from io import BytesIO
+from pathlib import Path
+from datetime import datetime
+import html, re as _re
+
+def _register_default_font():
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVu", "DejaVuSans.ttf"))
+        return "DejaVu"
+    except Exception:
+        return "Helvetica"
+
 def _mk_paragraph(text: str, style_name: str, styles, font_name: str):
-    # Sanitiza y reemplaza saltos de línea por <br/>
     safe = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     safe = safe.replace("\n", "<br/>")
     style = ParagraphStyle(name=style_name, parent=styles["Normal"], fontName=font_name, fontSize=10, leading=14)
@@ -135,83 +154,70 @@ def _mk_paragraph(text: str, style_name: str, styles, font_name: str):
 
 def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix Controller",
                               autor="Fénix Automotriz", logo_path=LOGO_PATH):
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.units import cm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, ListFlowable, ListItem, PageBreak
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from io import BytesIO
-    from pathlib import Path
-    import datetime as _dt
-    import html, re
-    def _register_default_font():
-        try:
-            pdfmetrics.registerFont(TTFont("DejaVu", "DejaVuSans.ttf"))
-            return "DejaVu"
-        except Exception:
-            return "Helvetica"
-    def _sanitize_text(t: str) -> str:
-        t = (t or "").replace("
-","
-").replace("
-","
-").strip()
-        lines = []
-        for ln in t.splitlines():
-            if ln.strip().lower().startswith("viz:"):
-                continue
-            lines.append(ln)
-        t = "
-".join(lines)
-        t = html.escape(t).replace("&lt;b&gt;","<b>").replace("&lt;/b&gt;","</b>").replace("&lt;i&gt;","<i>").replace("&lt;/i&gt;","</i>").replace("&lt;br&gt;","<br/>").replace("&lt;br/&gt;","<br/>")
-        return t
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.6*cm, bottomMargin=1.6*cm)
     styles = getSampleStyleSheet()
     font_name = _register_default_font()
-    styles.add(ParagraphStyle(name="TitleFx", parent=styles["Title"], fontName=font_name, spaceAfter=10))
-    styles.add(ParagraphStyle(name="MetaFx", parent=styles["Normal"], fontName=font_name, fontSize=9, textColor="#666"))
-    styles.add(ParagraphStyle(name="H1Fx", parent=styles["Heading2"], fontName=font_name, spaceBefore=8, spaceAfter=6))
-    styles.add(ParagraphStyle(name="QFx", parent=styles["Normal"], fontName=font_name, leading=14, spaceAfter=6))
-    styles.add(ParagraphStyle(name="AFx", parent=styles["Normal"], fontName=font_name, leading=14))
     story = []
-    if Path(str(logo_path)).exists():
-        story.append(RLImage(str(logo_path), width=1.8*cm, height=1.8*cm))
-        story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph(titulo, styles["TitleFx"]))
-    story.append(Paragraph(f"Generado: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M')}", styles["MetaFx"]))
+    # Encabezado
+    try:
+        if Path(str(logo_path)).exists():
+            story.append(RLImage(str(logo_path), width=1.8*cm, height=1.8*cm))
+            story.append(Spacer(1, 0.2*cm))
+    except Exception:
+        pass
+    title_style = ParagraphStyle(name="TitleFx", parent=styles["Title"], fontName=font_name, fontSize=16, leading=20)
+    subtitle_style = ParagraphStyle(name="SubFx", parent=styles["Normal"], fontName=font_name, fontSize=10, textColor="#555")
+    story.append(Paragraph(titulo, title_style))
+    story.append(Paragraph(f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}", subtitle_style))
     story.append(Spacer(1, 0.4*cm))
+
+    # Cuerpo
     if not historial:
-        story.append(Paragraph("No hay entradas en el historial.", styles["AFx"]))
+        story.append(_mk_paragraph("No hay entradas en el historial.", "EmptyFx", styles, font_name))
     else:
         for i, item in enumerate(historial, start=1):
-            q = str(item.get("pregunta","")).strip()
-            a = _sanitize_text(str(item.get("respuesta","") or ""))
-            story.append(Paragraph(f"<b>#{i} — Pregunta</b>", styles["H1Fx"]))
-            story.append(Paragraph(html.escape(q), styles["QFx"]))
-            story.append(Paragraph("<b>Respuesta</b>", styles["H1Fx"]))
+            q = str(item.get("pregunta", "")).strip()
+            a = str(item.get("respuesta", "") or "")
+            # filtrar 'viz:'
+            lines = []
+            for ln in a.splitlines():
+                if ln.strip().lower().startswith("viz:"):
+                    continue
+                lines.append(ln)
+            a = "\n".join(lines)
+
+            story.append(_mk_paragraph(f"<b>#{i} — Pregunta</b>", f"QH{i}", styles, font_name))
+            story.append(_mk_paragraph(q, f"Q{i}", styles, font_name))
+            story.append(Spacer(1, 0.15*cm))
+
+            story.append(_mk_paragraph("<b>Respuesta</b>", f"AH{i}", styles, font_name))
+
             blocks = []
             current_list = []
             for ln in a.split("\n"):
-                if re.match(r"^\s*-\s+", ln):
+                if _re.match(r"^\s*-\s+", ln):
                     current_list.append(ln.strip()[2:].strip())
                 else:
                     if current_list:
                         blocks.append(("list", current_list.copy())); current_list = []
                     blocks.append(("p", ln))
             if current_list: blocks.append(("list", current_list))
+
             for kind, payload in blocks:
                 if kind == "p":
                     if payload.strip() == "":
                         story.append(Spacer(1, 0.1*cm))
                     else:
-                        story.append(Paragraph(payload, styles["AFx"]))
+                        story.append(_mk_paragraph(payload, f"A{i}", styles, font_name))
                 else:
-                    items = [ListItem(Paragraph(html.escape(x), styles["AFx"])) for x in payload]
+                    items = [ListItem(_mk_paragraph(x, f"L{i}", styles, font_name)) for x in payload]
                     story.append(ListFlowable(items, bulletType="bullet", start="•", leftIndent=12))
+
             story.append(Spacer(1, 0.5*cm))
-            if len(a) > 2500: story.append(PageBreak())
+            if len(a) > 2500:
+                story.append(PageBreak())
+
     try:
         doc.build(story)
         pdf_bytes = buffer.getvalue()
@@ -219,6 +225,7 @@ def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix
         buffer.close()
     return pdf_bytes
 
+# Asegura que exista el historial en session_state
 # Asegura que exista el historial en session_state
 if "historial" not in st.session_state:
     st.session_state.historial = []
@@ -356,94 +363,6 @@ def diagnosticar_openai():
         res["quota_ok"] = None
     return res
 
-
-# ======== OpenAI con uso de tokens y latencia ========
-import time
-
-def ask_gpt_with_usage(messages):
-    client = _get_openai_client()
-    if client is None:
-        return "⚠️ No hay OPENAI_API_KEY configurada.", None
-    try:
-        t0 = time.time()
-        r = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.15
-        )
-        txt = (r.choices[0].message.content or "").strip()
-        u = getattr(r, "usage", None)
-        usage = {
-            "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
-            "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
-            "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
-            "model": getattr(r, "model", "gpt-4o"),
-            "latency_ms": round((time.time()-t0)*1000.0, 1)
-        }
-        return txt, usage
-    except Exception as e:
-        st.error(f"Fallo OpenAI: {e}")
-        return "⚠️ Error de IA.", None
-
-def render_usage_caption(usage):
-    if not usage:
-        return
-    st.caption(
-        f"Tokens: {usage['prompt_tokens']}/{usage['completion_tokens']} (prompt/completion), "
-        f"total {usage['total_tokens']} · Modelo: {usage['model']} · Latencia: {usage['latency_ms']} ms"
-    )
-
-# ======== Logging de uso (CSV y opcional Google Sheet) ========
-def _log_usage_to_csv(row: dict, path: str = "usage_log.csv"):
-    try:
-        import csv, os
-        file_exists = os.path.isfile(path)
-        with open(path, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(row.keys()))
-            if not file_exists:
-                w.writeheader()
-            w.writerow(row)
-    except Exception:
-        pass
-
-def _log_usage_to_gsheet(row: dict):
-    url = _get_secret("USAGE_SHEET_URL")
-    keyfile = _get_secret("GOOGLE_CREDENTIALS")
-    if not (url and keyfile):
-        return False
-    try:
-        creds = Credentials.from_service_account_info(json.loads(keyfile),
-                    scopes=["https://www.googleapis.com/auth/spreadsheets"])
-        gclient = gspread.authorize(creds)
-        sh = gclient.open_by_url(url)
-        tabs = {w.title: w for w in sh.worksheets()}
-        ws = tabs.get("usage") or sh.add_worksheet(title="usage", rows=1, cols=10)
-        headers = ["ts","user","question","scope","model","prompt_tokens","completion_tokens","total_tokens","latency_ms"]
-        if ws.cell(1,1).value != "ts":
-            ws.update("A1:I1", [headers])
-        ws.append_row([row.get(k,"") for k in headers], value_input_option="RAW")
-        return True
-    except Exception:
-        return False
-
-def log_usage(question:str, usage:dict, scope:str="consulta"):
-    if not usage:
-        return
-    row = {
-        "ts": pd.Timestamp.now(tz="America/Santiago").isoformat(),
-        "user": st.session_state.get("auth_user","admin"),
-        "question": (question or "")[:300],
-        "scope": scope,
-        "model": usage.get("model",""),
-        "prompt_tokens": usage.get("prompt_tokens",0),
-        "completion_tokens": usage.get("completion_tokens",0),
-        "total_tokens": usage.get("total_tokens",0),
-        "latency_ms": usage.get("latency_ms",0.0)
-    }
-    ok = _log_usage_to_gsheet(row)
-    if not ok:
-        _log_usage_to_csv(row)
-    st.session_state.setdefault("usage_session_log", []).append(row)
 # ======== Limpieza / formato ========
 ALL_SPACES_RE = re.compile(r'[\u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]')
 INVISIBLES_RE = re.compile(r'[\u200B\u200C\u200D\uFEFF\u2060\u00AD]')
@@ -1117,7 +1036,7 @@ def make_system_prompt():
             "Responde SIEMPRE con estilo ejecutivo + analítico y basándote EXCLUSIVAMENTE en la planilla.")
 
 ANALYSIS_FORMAT = """
-Escribe SIEMPRE en este formato (usa '###' y bullets '- '). **Extensión mínima total:** 180–300 palabras por respuesta. En cada sección escribe 2–4 frases con cifras y acciones:
+Escribe SIEMPRE en este formato (usa '###' y bullets '- '):
 
 ### Resumen ejecutivo
 - 3 a 5 puntos clave con cifras y contexto.
@@ -1452,22 +1371,6 @@ def compose_focus_text(facts: dict, pregunta: str) -> str:
     lines.append("### Recomendaciones\n" + "\n".join([f"- {r}" for r in recs]))
     return "\n\n".join(lines)
 
-
-def prompt_expand_from_base(base_text: str, schema: dict, objetivo: str="finanzas") -> list:
-    system = make_system_prompt()
-    user = f"""
-Actúa como un controller financiero senior. A partir del siguiente TEXTO BASE, genera un INFORME PROFESIONAL más profundo y completo con el formato obligatorio. Evita repetir literalmente: amplía con análisis causal, estimaciones cuantificadas y acciones concretas. Si faltan datos, declara supuestos y limita conclusiones.
-Objetivo del análisis: {objetivo}
-
-TEXTO BASE:
-{base_text}
-
-ESQUEMA (con roles):
-{json.dumps(schema, ensure_ascii=False, indent=2)}
-
-{ANALYSIS_FORMAT}
-"""
-    return [{"role":"system","content":system}, {"role":"user","content":user}]
 # ======== Interfaz ========
 st.title("🤖 Controller Financiero IA")
 
@@ -1475,8 +1378,8 @@ with st.sidebar:
     st.markdown("### Menú")
     ss.menu_sel = st.radio(
         "Secciones",
-        ["Datos","Vista previa","KPIs","Consulta IA","Historial","Uso de tokens","Diagnóstico IA"],
-        index=["Datos","Vista previa","KPIs","Consulta IA","Historial","Uso de tokens","Diagnóstico IA"].index(ss.menu_sel),
+        ["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"],
+        index=["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"].index(ss.menu_sel),
         label_visibility="collapsed"
     )
     st.markdown("---")
@@ -1491,12 +1394,6 @@ with st.sidebar:
             st.caption(f"Hash finanzas: `{h}`")
         except Exception as e:
             st.caption(f"No pude inspeccionar funciones: {e}")
-    # --- Acciones finales del sidebar ---
-    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
-    st.sidebar.markdown("")
-    st.sidebar.button("🆘 Soporte", disabled=True, use_container_width=True)
-    st.sidebar.markdown("<div style='text-align:center; font-size:13px;'>contacto@nexa.cl<br>+56973421015</div>", unsafe_allow_html=True)
-
 
 # ======== Vistas ========
 if ss.menu_sel == "Datos":
@@ -1572,11 +1469,9 @@ elif ss.menu_sel == "Consulta IA":
             analisis = analizar_datos_taller(data, "")
             ins = derive_global_insights(data)
             texto_extra = compose_actionable_text(ins)
-            raw, usage = ask_gpt_with_usage(prompt_analisis_general(analisis))
+            raw = ask_gpt(prompt_analisis_general(analisis))
             with left:
                 render_ia_html_block(prettify_answer(raw) + "\n\n" + texto_extra, height=520)
-            render_usage_caption(usage)
-            log_usage("Análisis general", usage, scope="analisis")
             with right:
                 render_finance_table(data)
                 st.markdown("### Distribución por cliente y procesos")
@@ -1597,23 +1492,13 @@ elif ss.menu_sel == "Consulta IA":
 
         if cBtns[1].button("💵 Análisis Financiero"):
             ins = derive_global_insights(data)
-            base = "### Análisis financiero (foco)\n" + compose_actionable_text(ins)
-            schema = _build_schema(data)
-            prompt = prompt_expand_from_base(base, schema, objetivo="finanzas")
-            raw, usage = ask_gpt_with_usage(prompt)
-            with left:  render_ia_html_block(prettify_answer(raw), height=620)
-            render_usage_caption(usage)
-            log_usage("Análisis financiero", usage, scope="analisis")
+            texto = "### Análisis financiero (foco)\n" + compose_actionable_text(ins)
+            with left:  render_ia_html_block(texto, height=520)
             with right: render_finance_table(data)
 
         if cBtns[2].button("⚙️ Análisis Operacional"):
-            base = compose_operational_text(data)
-            schema = _build_schema(data)
-            prompt = prompt_expand_from_base(base, schema, objetivo="operaciones")
-            raw, usage = ask_gpt_with_usage(prompt)
-            with left:  render_ia_html_block(prettify_answer(raw), height=620)
-            render_usage_caption(usage)
-            log_usage("Análisis operacional", usage, scope="analisis")
+            texto = compose_operational_text(data)
+            with left:  render_ia_html_block(texto, height=520)
             with right:
                 def is_proceso(n): return ("proceso" in n) or ("servicio" in n)
                 h, df, cat, val = find_best_pair_money(data, is_proceso)
@@ -1670,10 +1555,8 @@ elif ss.menu_sel == "Consulta IA":
             if not facts.get("ok"):
                 with left:
                     st.error(f"No pude calcular con precisión: {facts.get('msg') or 'plan vacío'}. Uso la ruta de análisis clásico.")
-                raw, usage = ask_gpt_with_usage(prompt_consulta_libre(pregunta, schema))
+                raw = ask_gpt(prompt_consulta_libre(pregunta, schema))
                 with left:  render_ia_html_block(raw, height=620)
-                render_usage_caption(usage)
-                log_usage(pregunta, usage, scope="consulta")
                 with right:
                     ok = False
                     try:
@@ -1723,28 +1606,6 @@ elif ss.menu_sel == "Consulta IA":
                     st.caption(f"Hoja: {facts['sheet']} • Filas: {facts['rows']}")
                 ss.historial.append({"pregunta":pregunta,"respuesta":texto_left})
 
-
-elif ss.menu_sel == "Uso de tokens":
-    st.markdown("### 📈 Uso de tokens")
-    df_sess = pd.DataFrame(st.session_state.get("usage_session_log", []))
-    st.subheader("Sesión actual")
-    if not df_sess.empty:
-        tot = df_sess[["prompt_tokens","completion_tokens","total_tokens"]].sum()
-        c1,c2,c3 = st.columns(3)
-        c1.metric("Prompt", int(tot["prompt_tokens"])); c2.metric("Completion", int(tot["completion_tokens"])); c3.metric("Total", int(tot["total_tokens"]))
-        st.markdown("#### Detalle")
-        st.dataframe(df_sess.tail(200), use_container_width=True)
-    else:
-        st.caption("Aún no hay registros en esta sesión.")
-    st.markdown("---")
-    st.subheader("Histórico (persistente)")
-    import os as _os
-    if _os.path.exists("usage_log.csv"):
-        dfl = pd.read_csv("usage_log.csv")
-        st.dataframe(dfl.tail(200), use_container_width=True)
-        st.download_button("Descargar usage_log.csv", dfl.to_csv(index=False).encode("utf-8"), "usage_log.csv", "text/csv", use_container_width=True)
-    else:
-        st.caption("Aún no existe usage_log.csv")
 elif ss.menu_sel == "Historial":
     if ss.historial:
         for i, h in enumerate(ss.historial[-20:], 1):
