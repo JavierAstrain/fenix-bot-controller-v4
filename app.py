@@ -69,7 +69,7 @@ def _logout():
           st.session_state.pop(k, None)
     st.rerun()
 
-def _login_view() -> bool:
+def _login_view():
     render_logo_topright(LOGO_SIZE_LOGIN)
     st.markdown("## 🔐 Iniciar sesión")
     with st.form("login_form"):
@@ -80,20 +80,16 @@ def _login_view() -> bool:
             if (u or "") == str(USER) and (p or "") == str(PASSWORD):
                 st.session_state.authenticated = True
                 st.success("Acceso concedido. Cargando…")
-                return True
+                st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
-    return False
-
 
 # Botón de cerrar sesión solo si ya inició
-if st.session_state.authenticated:
-    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
 
 # Gate de acceso: si no está autenticado, muestra login y detiene la renderización
 if not st.session_state.authenticated:
-    if not _login_view():
-        st.stop()
+    _login_view()
+    st.stop()
 
 # Logo en la vista principal (arriba a la derecha)
 render_logo_topright(LOGO_SIZE_APP)
@@ -299,6 +295,93 @@ def ask_gpt(messages) -> str:
         st.error(f"Fallo OpenAI: {e}")
         return "⚠️ Error de IA."
 
+
+# ======== OpenAI con uso de tokens y latencia (no rompe funciones previas) ========
+import time
+
+def ask_gpt_with_usage(messages):
+    client = _get_openai_client()
+    if client is None:
+        return "⚠️ No hay OPENAI_API_KEY configurada.", None
+    try:
+        t0 = time.time()
+        r = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.15
+        )
+        txt = (r.choices[0].message.content or "").strip()
+        u = getattr(r, "usage", None)
+        usage = {
+            "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
+            "model": getattr(r, "model", "gpt-4o"),
+            "latency_ms": round((time.time()-t0)*1000.0, 1)
+        }
+        return txt, usage
+    except Exception as e:
+        st.error(f"Fallo OpenAI: {e}")
+        return "⚠️ Error de IA.", None
+
+def render_usage_caption(usage):
+    if not usage: 
+        return
+    st.caption(
+        f"Tokens: {usage['prompt_tokens']}/{usage['completion_tokens']} (prompt/completion), "
+        f"total {usage['total_tokens']} · Modelo: {usage['model']} · Latencia: {usage['latency_ms']} ms"
+    )
+
+# ======== Logging de uso a GSheet (si hay secret) o CSV local ========
+def _log_usage_to_csv(row: dict, path: str = "usage_log.csv"):
+    try:
+        import csv, os
+        file_exists = os.path.isfile(path)
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if not file_exists:
+                w.writeheader()
+            w.writerow(row)
+    except Exception:
+        pass
+
+def _log_usage_to_gsheet(row: dict):
+    url = _get_secret("USAGE_SHEET_URL")
+    keyfile = _get_secret("GOOGLE_CREDENTIALS")
+    if not (url and keyfile):
+        return False
+    try:
+        creds = Credentials.from_service_account_info(json.loads(keyfile),
+                    scopes=["https://www.googleapis.com/auth/spreadsheets"])
+        client = gspread.authorize(creds)
+        sh = client.open_by_url(url)
+        ws_list = {w.title: w for w in sh.worksheets()}
+        ws = ws_list.get("usage") or sh.add_worksheet("usage", rows=1, cols=20)
+        headers = ["ts","user","question","scope","model","prompt_tokens","completion_tokens","total_tokens","latency_ms"]
+        if ws.cell(1,1).value != "ts":
+            ws.update("A1:I1", [headers])
+        ws.append_row([row.get(k,"") for k in headers], value_input_option="RAW")
+        return True
+    except Exception:
+        return False
+
+def log_usage(question:str, usage:dict, scope:str="consulta"):
+    if not usage:
+        return
+    row = {
+        "ts": pd.Timestamp.now(tz="America/Santiago").isoformat(),
+        "user": st.session_state.get("auth_user","admin"),
+        "question": (question or "")[:300],
+        "scope": scope,
+        "model": usage.get("model",""),
+        "prompt_tokens": usage.get("prompt_tokens",0),
+        "completion_tokens": usage.get("completion_tokens",0),
+        "total_tokens": usage.get("total_tokens",0),
+        "latency_ms": usage.get("latency_ms",0.0)
+    }
+    ok = _log_usage_to_gsheet(row)
+    if not ok:
+        _log_usage_to_csv(row)
 def diagnosticar_openai():
     res = {"api_key_present": False, "organization_set": False, "base_url_set": False,
            "list_models_ok": False, "chat_ok": False, "quota_ok": None, "usage_tokens": None, "error": None}
@@ -1353,12 +1436,55 @@ with st.sidebar:
         index=["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"].index(ss.menu_sel),
         label_visibility="collapsed"
     )
+
+
+    # --- Exportar (debajo del menú) ---
+    if 'HAVE_REPORTLAB' in globals():
+        if HAVE_REPORTLAB:
+            st.markdown("### 📄 Exportar")
+            if st.session_state.historial:
+                try:
+                    _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
+                    st.download_button(
+                        "Descargar historial (PDF)",
+                        data=_pdf_data,
+                        file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.warning(f"No se pudo generar el PDF: {e}")
+            else:
+                st.caption("Aún no hay historial para exportar.")
+        else:
+            st.info("Para exportar a PDF, agrega `reportlab` a requirements.txt y vuelve a desplegar.")
+
+    # --- Soporte ---
+    with st.expander("🆘 Soporte", expanded=False):
+        st.markdown(
+            "- **Email:** contacto@nexa.cl\n"
+            "- **Teléfono:** +56973421015\n"
+            "_(Datos de ejemplo)_"
+        )
+
+    # --- Footer fijo ---
+    st.markdown(
+        """
+
+        <style>
+        #nexa-footer { position: fixed; left: 0.75rem; bottom: 0.5rem; font-size: 11px; color: #6b7280; }
+        </style>
+        <div id="nexa-footer">Desarrollado por Nexa corp. IA. Todos los derechos reservados.</div>
+        """ , unsafe_allow_html=True)
     st.markdown("---")
     st.markdown("### Preferencias")
     ss.max_cats_grafico = st.number_input("Máx. categorías para graficar", 6, 200, ss.max_cats_grafico)
     ss.top_n_grafico    = st.number_input("Top-N por defecto (barras)", 5, 100, ss.top_n_grafico)
 
     with st.expander("🔧 Diagnóstico del código"):
+
+    # Botón de Cerrar Sesión debajo del diagnóstico del código
+    st.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
         st.caption(f"Build: **{APP_BUILD}**")
         try:
             h = hashlib.sha256(render_finance_table.__code__.co_code).hexdigest()[:16]
@@ -1440,9 +1566,10 @@ elif ss.menu_sel == "Consulta IA":
             analisis = analizar_datos_taller(data, "")
             ins = derive_global_insights(data)
             texto_extra = compose_actionable_text(ins)
-            raw = ask_gpt(prompt_analisis_general(analisis))
+            raw, usage = ask_gpt_with_usage(prompt_analisis_general(analisis))
             with left:
                 render_ia_html_block(prettify_answer(raw) + "\n\n" + texto_extra, height=520)
+            render_usage_caption(usage)
             with right:
                 render_finance_table(data)
                 st.markdown("### Distribución por cliente y procesos")
@@ -1526,8 +1653,9 @@ elif ss.menu_sel == "Consulta IA":
             if not facts.get("ok"):
                 with left:
                     st.error(f"No pude calcular con precisión: {facts.get('msg') or 'plan vacío'}. Uso la ruta de análisis clásico.")
-                raw = ask_gpt(prompt_consulta_libre(pregunta, schema))
+                raw, usage = ask_gpt_with_usage(prompt_consulta_libre(pregunta, schema))
                 with left:  render_ia_html_block(raw, height=620)
+                render_usage_caption(usage)
                 with right:
                     ok = False
                     try:
@@ -1538,6 +1666,7 @@ elif ss.menu_sel == "Consulta IA":
                     if not ok:
                         st.info("Sin visual sugerida para esta consulta.")
                 ss.historial.append({"pregunta":pregunta,"respuesta":raw})
+                log_usage(pregunta, usage, scope="consulta")
             else:
                 texto_left = compose_focus_text(facts, pregunta)
                 with left:  render_ia_html_block(texto_left, height=520)
@@ -1604,4 +1733,5 @@ elif ss.menu_sel == "Diagnóstico IA":
         else: st.info("No se pudo determinar la cuota.")
         if diag["usage_tokens"] is not None: st.caption(f"Tokens: {diag['usage_tokens']}")
         if diag["error"]: st.warning(f"Detalle: {diag['error']}")
+
 
