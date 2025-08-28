@@ -198,26 +198,7 @@ if "historial" not in st.session_state:
     st.session_state.historial = []
 
 # UI en el sidebar para descarga del PDF
-with st.sidebar:
-    st.markdown("### 📄 Exportar")
-    if HAVE_REPORTLAB:
-        if st.session_state.historial:
-            try:
-                _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
-                st.download_button(
-                    "Descargar historial (PDF)",
-                    data=_pdf_data,
-                    file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.warning(f"No se pudo generar el PDF: {e}")
-        else:
-            st.caption("Aún no hay historial para exportar.")
-    else:
-        st.info("Para exportar a PDF, agrega `reportlab` a tu requirements.txt y vuelve a desplegar.")
-# =========================
+## (Movido) Exportar Historial: este bloque fue reubicado más abajo junto al menú.
 # 📄 Fin Exportar Historial
 # =========================
 
@@ -1460,7 +1441,7 @@ with st.sidebar:
             st.info("Para exportar a PDF, agrega `reportlab` a requirements.txt y vuelve a desplegar.")
 
     # --- Soporte ---
-    with st.expander("🆘 Soporte", expanded=False):
+    with st.sidebar.expander("🆘 Soporte", expanded=False):
         st.markdown(
             "- **Email:** contacto@nexa.cl\n"
             "- **Teléfono:** +56973421015\n"
@@ -1468,7 +1449,7 @@ with st.sidebar:
         )
 
     # --- Footer fijo ---
-    st.markdown(
+    st.sidebar.markdown(
         """
 
         <style>
@@ -1476,15 +1457,13 @@ with st.sidebar:
         </style>
         <div id="nexa-footer">Desarrollado por Nexa corp. IA. Todos los derechos reservados.</div>
         """ , unsafe_allow_html=True)
-    st.markdown("---")
-    st.markdown("### Preferencias")
-    ss.max_cats_grafico = st.number_input("Máx. categorías para graficar", 6, 200, ss.max_cats_grafico)
-    ss.top_n_grafico    = st.number_input("Top-N por defecto (barras)", 5, 100, ss.top_n_grafico)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Preferencias")
+    ss.max_cats_grafico = st.sidebar.number_input("Máx. categorías para graficar", 6, 200, ss.max_cats_grafico)
+    ss.top_n_grafico    = st.sidebar.number_input("Top-N por defecto (barras)", 5, 100, ss.top_n_grafico)
 
-    with st.expander("🔧 Diagnóstico del código"):
-
-    # Botón de Cerrar Sesión debajo del diagnóstico del código
-    st.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
+    
+    with st.sidebar.expander("🔧 Diagnóstico del código"):
         st.caption(f"Build: **{APP_BUILD}**")
         try:
             h = hashlib.sha256(render_finance_table.__code__.co_code).hexdigest()[:16]
@@ -1492,6 +1471,8 @@ with st.sidebar:
         except Exception as e:
             st.caption(f"No pude inspeccionar funciones: {e}")
 
+    # Botón de Cerrar Sesión debajo del diagnóstico del código
+    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
 # ======== Vistas ========
 if ss.menu_sel == "Datos":
     st.markdown("### 📁 Datos")
