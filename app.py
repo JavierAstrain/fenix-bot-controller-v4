@@ -17,7 +17,9 @@ from streamlit.components.v1 import html as st_html
 from analizador import analizar_datos_taller
 
 APP_BUILD = "build-2025-08-27-focus-v7b"
-st.set_page_config(layout="wide", page_title="Controller Financiero IA")
+FAVICON_PATH = st.secrets.get("FAVICON_PATH", "Isotipo_Nexa.png") or "Isotipo_Nexa.png"
+
+st.set_page_config(layout="wide", page_title="Controller Financiero IA", page_icon=FAVICON_PATH)
 
 
 # =========================
@@ -71,6 +73,18 @@ def _logout():
 
 def _login_view():
     render_logo_topright(LOGO_SIZE_LOGIN)
+    # Logo Nexa (login, centrado sobre el formulario)
+    _LOGIN_LOGO_PATH = st.secrets.get('LOGIN_LOGO_PATH', 'Nexa_logo.png') or 'Nexa_logo.png'
+    col_l, col_c, col_r = st.columns([1,1,1])
+    with col_c:
+        try:
+            st.image(_LOGIN_LOGO_PATH, width=160)
+        except Exception:
+            try:
+                st.image('Isotipo_Nexa.png', width=160)
+            except Exception:
+                pass
+    st.markdown('---')
     st.markdown("## 🔐 Iniciar sesión")
     with st.form("login_form"):
         u = st.text_input("Usuario", value="")
