@@ -1438,6 +1438,13 @@ st.title("🤖 Controller Financiero IA")
 
 
 with st.sidebar:
+    # Logo Nexa (arriba del menú, alineado a la izquierda)
+    _SIDEBAR_LOGO_PATH = st.secrets.get('SIDEBAR_LOGO_PATH', 'Nexa_logo.png') or 'Nexa_logo.png'
+    try:
+        st.image(_SIDEBAR_LOGO_PATH, width=130)
+    except Exception:
+        pass
+    st.markdown('---')
     st.markdown("### Menú")
     _menu_items = ["Datos","Vista previa","KPIs","Consulta IA","Historial","Uso de Tokens","Diagnóstico IA","Soporte"]
     try:
