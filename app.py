@@ -17,11 +17,7 @@ from streamlit.components.v1 import html as st_html
 from analizador import analizar_datos_taller
 
 APP_BUILD = "build-2025-08-27-focus-v7b"
-st.set_page_config(
-    page_title="Controller Financiero IA — Fénix",
-    page_icon="Fenix_isotipo.png",  # PNG en la raíz del repo
-    layout="wide"
-)
+st.set_page_config(layout="wide", page_title="Controller Financiero IA")
 
 
 # =========================
@@ -87,6 +83,10 @@ def _login_view():
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
+
+# Botón de cerrar sesión solo si ya inició
+if st.session_state.authenticated:
+    st.sidebar.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
 
 # Gate de acceso: si no está autenticado, muestra login y detiene la renderización
 if not st.session_state.authenticated:
@@ -199,6 +199,42 @@ def build_historial_pdf_bytes(historial, titulo="Historial de Sesión — Fénix
 if "historial" not in st.session_state:
     st.session_state.historial = []
 
+# UI en el sidebar para descarga del PDF
+with st.sidebar:
+    # Logo Nexa (alineado a la izquierda arriba del menú)
+    SIDEBAR_LOGO_PATH = st.secrets.get('SIDEBAR_LOGO_PATH', 'Nexa_logo.png') or 'Nexa_logo.png'
+    try:
+        st.image(SIDEBAR_LOGO_PATH, width=130)
+    except Exception:
+        pass
+    st.markdown('---')
+
+    st.markdown("### 📄 Exportar")
+    if HAVE_REPORTLAB:
+        if st.session_state.historial:
+            try:
+                _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
+                st.download_button(
+                    "Descargar historial (PDF)",
+                    data=_pdf_data,
+                    file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.warning(f"No se pudo generar el PDF: {e}")
+        else:
+            st.caption("Aún no hay historial para exportar.")
+    else:
+        st.info("Para exportar a PDF, agrega `reportlab` a tu requirements.txt y vuelve a desplegar.")
+# =========================
+# 📄 Fin Exportar Historial
+# =========================
+
+# =========================
+# 🔐 Fin Login + Logo
+# =========================
+
 # ======== Estilo ========
 st.markdown("""
 <style>
@@ -213,36 +249,6 @@ html, body, [data-testid="stMarkdownContainer"]{
 [data-testid="stMarkdownContainer"] code{font-family:inherit!important;background:transparent!important;}
 </style>
 """, unsafe_allow_html=True)
-# ======== Temas de color (propuestas) ========
-_THEMES = {
-    "Azul (fondo claro)": {"primary": "#1E88E5", "bg": "#FFFFFF", "panel": "#F5F7FB", "text": "#0F172A", "muted": "#64748B"},
-    "Verde Fénix (fondo claro)": {"primary": "#39D353", "bg": "#FFFFFF", "panel": "#F5F7FB", "text": "#0F172A", "muted": "#64748B"},
-    "Rojo claro": {"primary": "#F87171", "bg": "#FFFFFF", "panel": "#FDF2F2", "text": "#111827", "muted": "#6B7280"},
-    "Negro (acento)": {"primary": "#111827", "bg": "#FFFFFF", "panel": "#F3F4F6", "text": "#111827", "muted": "#6B7280"},
-    "Naranjo": {"primary": "#FB923C", "bg": "#FFFFFF", "panel": "#FFF7ED", "text": "#111827", "muted": "#6B7280"},
-    "Plateado": {"primary": "#9CA3AF", "bg": "#FFFFFF", "panel": "#F3F4F6", "text": "#111827", "muted": "#6B7280"},
-    "Dorado": {"primary": "#D4AF37", "bg": "#FFFFFF", "panel": "#FFFBEA", "text": "#111827", "muted": "#6B7280"},
-}
-def _apply_theme(name: str):
-    t = _THEMES.get(name, _THEMES["Verde Fénix (fondo claro)"])
-    css = f"""<style>
-    :root {{
-      --color-primary: {t['primary']};
-      --color-bg: {t['bg']};
-      --color-panel: {t['panel']};
-      --color-text: {t['text']};
-      --color-muted: {t['muted']};
-    }}
-    .stApp, html, body {{ background: var(--color-bg) !important; color: var(--color-text) !important; }}
-    [data-testid="stSidebar"] {{ background: var(--color-panel) !important; }}
-    .stButton>button, .stDownloadButton>button, .stDownloadButton>button:hover {{
-        background: var(--color-primary) !important; border-color: var(--color-primary) !important; color: white !important; font-weight: 600;
-    }}
-    .stDataFrame thead tr th {{ background: var(--color-panel) !important; color: var(--color-text) !important; }}
-    .stDataFrame tbody tr td {{ color: var(--color-text) !important; }}
-    </style>"""
-    st.markdown(css, unsafe_allow_html=True)
-
 
 ss = st.session_state
 ss.setdefault("historial", [])
@@ -284,70 +290,20 @@ def _get_openai_client():
     try: return OpenAI(**kw)
     except: return None
 
-
-def ask_gpt(messages, model: str = "gpt-4o", temperature: float = 0.15, max_tokens: int | None = None, action: str = "chat", question_hint: str = "") -> str:
-    """Wrapper de OpenAI que además guarda el uso de tokens en session_state y en un log local.
-    Devuelve SOLO el texto para mantener compatibilidad con el resto del código.
-    """
+def ask_gpt(messages) -> str:
     client = _get_openai_client()
     if client is None:
-        st.session_state['_last_usage'] = None
         return "⚠️ No hay OPENAI_API_KEY configurada."
     try:
         r = client.chat.completions.create(
-            model=model,
+            model="gpt-4o",
             messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens
+            temperature=0.15
         )
-        text = (r.choices[0].message.content or "").strip()
-        usage = None
-        if getattr(r, "usage", None):
-            usage = {
-                "prompt_tokens": getattr(r.usage, "prompt_tokens", None),
-                "completion_tokens": getattr(r.usage, "completion_tokens", None),
-                "total_tokens": getattr(r.usage, "total_tokens", None),
-                "model": model,
-                "action": action,
-                "question": question_hint
-            }
-        st.session_state['_last_usage'] = usage
-        try:
-            if usage:
-                _log_tokens_persist(usage)
-        except Exception:
-            pass
-        return text
+        return r.choices[0].message.content or ""
     except Exception as e:
-        st.session_state['_last_usage'] = None
         st.error(f"Fallo OpenAI: {e}")
         return "⚠️ Error de IA."
-
-# ======== Token usage (persistente local) ========
-from pathlib import Path as _Path
-_TOK_LOG = _Path(".tokens_usage.jsonl")
-
-def _log_tokens_persist(info: dict):
-    try:
-        rec = info.copy()
-        rec["ts"] = pd.Timestamp.utcnow().isoformat()
-        with _TOK_LOG.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-def read_tokens_history_df() -> pd.DataFrame:
-    if not _TOK_LOG.exists():
-        return pd.DataFrame(columns=["ts","action","question","model","prompt_tokens","completion_tokens","total_tokens"])
-    try:
-        rows = [json.loads(x) for x in _TOK_LOG.read_text(encoding="utf-8").splitlines() if x.strip()]
-        df = pd.DataFrame(rows)
-        for c in ["prompt_tokens","completion_tokens","total_tokens"]:
-            if c in df: df[c] = pd.to_numeric(df[c], errors="coerce")
-        return df
-    except Exception:
-        return pd.DataFrame(columns=["ts","action","question","model","prompt_tokens","completion_tokens","total_tokens"])
-
 
 def diagnosticar_openai():
     res = {"api_key_present": False, "organization_set": False, "base_url_set": False,
@@ -1357,7 +1313,6 @@ def build_verified_summary(facts: dict) -> str:
         lines = [f"- {val.title()} ({op.upper()}): {_fmt(total)} (sobre {rows} filas)."]
     return encabezado + "\n".join(lines)
 
-
 def compose_focus_text(facts: dict, pregunta: str) -> str:
     op     = (facts.get("op") or "sum").upper()
     vrole  = facts.get("value_role","unknown")
@@ -1369,109 +1324,45 @@ def compose_focus_text(facts: dict, pregunta: str) -> str:
     def _fmt(v):
         if vrole=="money" and op!="COUNT": return fmt_money(v)
         return _fmt_number_general(v)
-
-    secciones = []
-    secciones.append(build_verified_summary(facts))
-
-    # Diagnóstico
-    diag = []
+    lines = [build_verified_summary(facts)]
+    lines.append("### Diagnóstico")
     if cat and by_cat:
         top3 = by_cat[:3]
         det = "; ".join([f"{c['categoria']}: {_fmt(c['valor'])}" for c in top3])
-        diag.append(f"Top 3 por **{cat}** → {det}.")
+        lines.append(f"- Top 3 por **{cat}** → {det}.")
         if len(by_cat) >= 5:
             tail = by_cat[3:5]
             det2 = "; ".join([f"{c['categoria']}: {_fmt(c['valor'])}" for c in tail])
-            diag.append(f"Siguientes → {det2}.")
-        share_top1 = (by_cat[0]['valor']/max(1e-9,total)) if total and by_cat and vrole!="percent" else None
-        if share_top1 and share_top1>0.35:
-            diag.append("Alta concentración: la 1ª categoría supera 35% del total.")
+            lines.append(f"- Siguientes → {det2}.")
     else:
-        diag.append(f"Resultado global: {_fmt(total)}.")
-    secciones.append("### Diagnóstico\n" + "\n".join([f"- {d}" for d in diag]))
-
-    # Recomendaciones
+        lines.append(f"- Resultado global: {_fmt(total)}.")
     recs = []
     if vrole=="money" and op in ("SUM","MAX"):
-        recs += [
-            "Ajustar mix hacia categorías con mejor margen.",
-            "Revisar pricing en categorías con menor aporte.",
-            "Estandarizar descuentos y aprobar excepciones por monto.",
-        ]
+        recs.append("Ajustar mix hacia categorías con mejor margen.")
+        recs.append("Revisar pricing en categorías con menor aporte.")
     elif op=="COUNT":
-        recs += [
-            "Diseñar campañas sobre las 3 categorías más frecuentes.",
-            "Apalancar referidos en categorías con mayor recurrencia.",
-        ]
+        recs.append("Diseñar campañas sobre las 3 categorías más frecuentes.")
+        recs.append("Apalancar referidos en categorías con mayor recurrencia.")
     else:
         recs.append("Monitorizar tendencia en el tiempo para validar estabilidad.")
-    secciones.append("### Recomendaciones\n" + "\n".join([f"- {r}" for r in recs]))
-
-    # Estimaciones y proyecciones (muy simples si no hay tiempo)
-    if vrole in ("money","percent","quantity"):
-        promedio = (total/rows) if rows else None
-        if promedio is not None and np.isfinite(promedio):
-            base = total * 1.02
-            optim = total * 1.07
-            cons = total * 0.95
-            secciones.append("### Estimaciones y proyecciones\n"
-                             f"- **Base (siguiente periodo)**: {_fmt(base)}\n"
-                             f"- **Optimista**: {_fmt(optim)}\n"
-                             f"- **Conservador**: {_fmt(cons)}\n"
-                             "- Supuesto: misma base de datos y estacionalidad promedio.")
-    # Riesgos
-    riesgos = [
-        "Dependencia de pocas categorías/clientes (concentración).",
-        "Subida de costos de insumos impacta margen si no se ajusta precio.",
-        "Demoras operativas elevan lead time y reducen capacidad efectiva."
-    ]
-    secciones.append("### Riesgos y alertas\n" + "\n".join([f"- {r}" for r in riesgos]))
-
-    # Próximos pasos
-    pasos = [
-        "Definir meta de margen y gap vs. actual.",
-        "Plan de precios (política de descuentos y revisión mensual).",
-        "Playbook comercial para empujar mix de mayor aporte.",
-    ]
-    secciones.append("### Próximos pasos\n" + "\n".join([f"- {p}" for p in pasos]))
-
-    return "\n\n".join(secciones)
+    lines.append("### Recomendaciones\n" + "\n".join([f"- {r}" for r in recs]))
+    return "\n\n".join(lines)
 
 # ======== Interfaz ========
 st.title("🤖 Controller Financiero IA")
 
-
 with st.sidebar:
     st.markdown("### Menú")
-    _menu_items = ["Datos","Vista previa","KPIs","Consulta IA","Historial","Uso de Tokens","Diagnóstico IA","Soporte"]
-    try:
-        idx = _menu_items.index(ss.menu_sel)
-    except Exception:
-        idx = 0
-    ss.menu_sel = st.radio("Secciones", _menu_items, index=idx, label_visibility="collapsed")
-
-    st.markdown("---")
-    st.markdown("### 📄 Exportar")
-    if HAVE_REPORTLAB:
-        if st.session_state.historial:
-            try:
-                _pdf_data = build_historial_pdf_bytes(st.session_state.historial)
-                st.download_button("Descargar historial (PDF)", data=_pdf_data,
-                                   file_name=f"historial_fenix_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf",
-                                   mime="application/pdf", use_container_width=True)
-            except Exception as e:
-                st.warning(f"No se pudo generar el PDF: {e}")
-        else:
-            st.caption("Aún no hay historial para exportar.")
-    else:
-        st.info("Para exportar a PDF agrega `reportlab` al requirements y vuelve a desplegar.")
-
+    ss.menu_sel = st.radio(
+        "Secciones",
+        ["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"],
+        index=["Datos","Vista previa","KPIs","Consulta IA","Historial","Diagnóstico IA"].index(ss.menu_sel),
+        label_visibility="collapsed"
+    )
     st.markdown("---")
     st.markdown("### Preferencias")
     ss.max_cats_grafico = st.number_input("Máx. categorías para graficar", 6, 200, ss.max_cats_grafico)
     ss.top_n_grafico    = st.number_input("Top-N por defecto (barras)", 5, 100, ss.top_n_grafico)
-    theme_choice = st.selectbox("🎨 Tema de colores", list(_THEMES.keys()), index=0, help="Cambia la paleta de colores de la app")
-    _apply_theme(theme_choice)
 
     with st.expander("🔧 Diagnóstico del código"):
         st.caption(f"Build: **{APP_BUILD}**")
@@ -1481,9 +1372,6 @@ with st.sidebar:
         except Exception as e:
             st.caption(f"No pude inspeccionar funciones: {e}")
 
-    st.markdown("---")
-    st.button("🚪 Cerrar sesión", on_click=_logout, use_container_width=True)
-st.caption("Desarrollado por Nexa corp. IA. Todos los derechos reservados.")
 # ======== Vistas ========
 if ss.menu_sel == "Datos":
     st.markdown("### 📁 Datos")
@@ -1561,9 +1449,6 @@ elif ss.menu_sel == "Consulta IA":
             raw = ask_gpt(prompt_analisis_general(analisis))
             with left:
                 render_ia_html_block(prettify_answer(raw) + "\n\n" + texto_extra, height=520)
-                _u = st.session_state.get('_last_usage')
-                if _u:
-                    st.caption(f"Uso de tokens — prompt: {_u.get('prompt_tokens', '?')}, completion: {_u.get('completion_tokens', '?')}, total: {_u.get('total_tokens', '?')} · modelo: {_u.get('model', '?')}")
             with right:
                 render_finance_table(data)
                 st.markdown("### Distribución por cliente y procesos")
@@ -1648,11 +1533,7 @@ elif ss.menu_sel == "Consulta IA":
                 with left:
                     st.error(f"No pude calcular con precisión: {facts.get('msg') or 'plan vacío'}. Uso la ruta de análisis clásico.")
                 raw = ask_gpt(prompt_consulta_libre(pregunta, schema))
-                with left:
-                    render_ia_html_block(raw, height=620)
-                    _u = st.session_state.get("_last_usage")
-                    if _u:
-                        st.caption(f"Uso de tokens — prompt: {_u.get('prompt_tokens', '?')}, completion: {_u.get('completion_tokens', '?')}, total: {_u.get('total_tokens', '?')} · modelo: {_u.get('model', '?')}")
+                with left:  render_ia_html_block(raw, height=620)
                 with right:
                     ok = False
                     try:
@@ -1665,11 +1546,7 @@ elif ss.menu_sel == "Consulta IA":
                 ss.historial.append({"pregunta":pregunta,"respuesta":raw})
             else:
                 texto_left = compose_focus_text(facts, pregunta)
-                with left:
-                    render_ia_html_block(texto_left, height=520)
-                    _u = st.session_state.get("_last_usage")
-                    if _u:
-                        st.caption(f"Uso de tokens — prompt: {_u.get('prompt_tokens', '?')}, completion: {_u.get('completion_tokens', '?')}, total: {_u.get('total_tokens', '?')} · modelo: {_u.get('model', '?')}")
+                with left:  render_ia_html_block(texto_left, height=520)
                 with right:
                     df_res = facts["df_result"]
                     if facts.get("category_col"):
@@ -1718,27 +1595,6 @@ elif ss.menu_sel == "Historial":
     else:
         st.info("Aún no hay historial en esta sesión.")
 
-
-elif ss.menu_sel == "Uso de Tokens":
-    _df_tok = read_tokens_history_df()
-    if _df_tok.empty:
-        st.info("Sin registros todavía. A medida que hagas consultas o análisis se guardará aquí el uso.")
-    else:
-        st.dataframe(_df_tok.sort_values("ts", ascending=False), use_container_width=True)
-        st.metric("Consultas registradas", int(len(_df_tok)))
-        if "total_tokens" in _df_tok:
-            st.metric("Total de tokens", int(pd.to_numeric(_df_tok["total_tokens"], errors="coerce").sum()))
-        with st.expander("Detalle crudo (JSONL)"):
-            try:
-                st.code("\n".join(open('.tokens_usage.jsonl','r',encoding='utf-8').read().splitlines()[-200:]) )
-            except Exception:
-                st.caption("No se pudo abrir el archivo de log.")
-elif ss.menu_sel == "Soporte":
-    st.markdown("### 📬 Soporte")
-    st.markdown("- **Email:** contacto@nexa.cl")
-    st.markdown("- **Teléfono:** +56973421015")
-    st.markdown("- Horario: Lun–Vie 09:00–18:00 (GMT-4)")
-    st.success("¡Gracias por usar Fénix Controller!")
 elif ss.menu_sel == "Diagnóstico IA":
     st.markdown("### 🔎 Diagnóstico de la IA (OpenAI)")
     st.caption("Verifica API Key, conexión, prueba mínima de chat y estado de cuota.")
