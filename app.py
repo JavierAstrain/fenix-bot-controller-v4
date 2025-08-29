@@ -72,11 +72,16 @@ def _logout():
     st.rerun()
 
 def _login_view():
-    render_logo_topright(LOGO_SIZE_LOGIN)
-    # Logo Nexa (login, centrado sobre el formulario)
+    # Fila de logos: Nexa (izquierda) y Fénix (derecha) a la misma altura
+    try:
+        col_left, col_center, col_right = st.columns([0.16, 0.68, 0.16], vertical_alignment="center")
+    except TypeError:
+        # version de Streamlit sin vertical_alignment
+        col_left, col_center, col_right = st.columns([0.16, 0.68, 0.16])
+
+    # Logo Nexa (arriba a la izquierda)
     _LOGIN_LOGO_PATH = st.secrets.get('LOGIN_LOGO_PATH', 'Nexa_logo.png') or 'Nexa_logo.png'
-    col_l, col_c, col_r = st.columns([1,1,1])
-    with col_c:
+    with col_left:
         try:
             st.image(_LOGIN_LOGO_PATH, width=160)
         except Exception:
@@ -84,7 +89,17 @@ def _login_view():
                 st.image('Isotipo_Nexa.png', width=160)
             except Exception:
                 pass
+
+    # Logo Fénix (arriba a la derecha, se mantiene)
+    from builtins import int as _int
+    with col_right:
+        try:
+            st.image(LOGO_PATH, width=_int(LOGO_SIZE_LOGIN))
+        except Exception:
+            pass
+
     st.markdown('---')
+
     st.markdown("## 🔐 Iniciar sesión")
     with st.form("login_form"):
         u = st.text_input("Usuario", value="")
@@ -1771,4 +1786,5 @@ elif ss.menu_sel == "Diagnóstico IA":
         else: st.info("No se pudo determinar la cuota.")
         if diag["usage_tokens"] is not None: st.caption(f"Tokens: {diag['usage_tokens']}")
         if diag["error"]: st.warning(f"Detalle: {diag['error']}")
+
 
